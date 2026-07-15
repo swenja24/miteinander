@@ -25,7 +25,8 @@ PUBLIC_DIR = Path(__file__).parent.joinpath("public").resolve()
 PASSWORD = os.getenv("APP_PASSWORD", "miteinander")
 MAX_BODY = 8_000_000
 RECEIPTS_DIR = DATA_DIR / "receipts"
-COLLECTIONS = {"cases", "tasks", "documents", "messages", "ledger", "members", "accounts"}
+CASE_FILES_DIR = DATA_DIR / "case-files"
+COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
 PERMISSION_KEYS = ("cases", "tasks", "documents", "ledger", "family")
@@ -39,7 +40,7 @@ def empty_data() -> dict:
     cash_id, savings_id, shared_id, bank_id = (str(uuid.uuid4()) for _ in range(4))
     return {
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
-        "cases": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
+        "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
         "accounts": [
@@ -78,11 +79,15 @@ def full_permissions() -> dict:
 def load_data() -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    CASE_FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         loaded = json.loads(DATA_FILE.read_text("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         loaded = empty_data()
     changed = False
+    if "correspondence" not in loaded:
+        loaded["correspondence"] = []
+        changed = True
     if loaded.get("family", {}).get("person") == "Alex":
         loaded["family"]["person"] = "Linea"
         for member in loaded.get("members", []):
@@ -142,6 +147,22 @@ def save_receipt(data_url: str) -> str:
     filename = f"{uuid.uuid4()}{extensions[media_type]}"
     (RECEIPTS_DIR / filename).write_bytes(content)
     return filename
+
+
+def save_case_file(data_url: str, original_name: str = "Dokument") -> dict:
+    if not data_url.startswith("data:") or ";base64," not in data_url:
+        raise ValueError("Ungültige Datei")
+    header, encoded = data_url.split(",", 1)
+    media_type = header[5:].split(";", 1)[0]
+    extensions = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "application/pdf": ".pdf"}
+    if media_type not in extensions:
+        raise ValueError("Unterstützt werden JPG, PNG, WebP und PDF")
+    content = base64.b64decode(encoded, validate=True)
+    if len(content) > 5_000_000:
+        raise ValueError("Die Datei ist zu groß (maximal 5 MB)")
+    filename = f"{uuid.uuid4()}{extensions[media_type]}"
+    (CASE_FILES_DIR / filename).write_bytes(content)
+    return {"attachmentFile": filename, "attachmentName": clean(original_name) or "Dokument", "attachmentType": media_type}
 
 
 def clean(value):
@@ -280,6 +301,7 @@ class Handler(SimpleHTTPRequestHandler):
             visible = {
                 "family": data["family"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
+                "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
                 "taskOptions": data.get("taskOptions", {"categories": []}) if self.allowed(user, "tasks") else {"categories": []},
                 "documents": data["documents"] if self.allowed(user, "documents") else [],
@@ -306,6 +328,25 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(receipt)[0] or "application/octet-stream")
             self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        if path.startswith("/api/case-files/") and method == "GET":
+            if not self.allowed(user, "cases"):
+                return self.send_json(403, {"error": "Kein Zugriff auf die Antragsakte."})
+            filename = path.rsplit("/", 1)[-1]
+            if not filename or filename != Path(filename).name:
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            attachment = CASE_FILES_DIR / filename
+            if not attachment.is_file():
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            content = attachment.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f"inline; filename={filename}")
             self.send_header("Cache-Control", "private, max-age=3600")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
@@ -394,7 +435,7 @@ class Handler(SimpleHTTPRequestHandler):
         if len(parts) not in (2, 3) or parts[0] != "api" or parts[1] not in COLLECTIONS:
             return self.send_json(404, {"error": "Nicht gefunden."})
         collection = parts[1]
-        permission = {"cases":"cases", "tasks":"tasks", "documents":"documents", "ledger":"ledger", "accounts":"family", "members":"family", "messages":"tasks"}[collection]
+        permission = {"cases":"cases", "correspondence":"cases", "tasks":"tasks", "documents":"documents", "ledger":"ledger", "accounts":"family", "members":"family", "messages":"tasks"}[collection]
         if not self.allowed(user, permission):
             return self.send_json(403, {"error": "Keine Berechtigung für diesen Bereich."})
         if collection == "accounts" and method in {"POST", "PUT", "DELETE"} and not user.get("isAdmin"):
@@ -403,6 +444,10 @@ class Handler(SimpleHTTPRequestHandler):
         with lock:
             if method == "POST" and not item_id:
                 payload = self.read_json()
+                if collection == "correspondence" and not any(case["id"] == payload.get("caseId") for case in data["cases"]):
+                    return self.send_json(400, {"error": "Der zugehörige Antrag wurde nicht gefunden."})
+                if collection == "cases" and payload.get("parentCaseId") and not any(case["id"] == payload.get("parentCaseId") for case in data["cases"]):
+                    return self.send_json(400, {"error": "Der Hauptantrag wurde nicht gefunden."})
                 if collection == "tasks":
                     due = str(payload.get("due") or "")
                     if due and due < date.today().isoformat() and not user.get("isAdmin"):
@@ -426,12 +471,16 @@ class Handler(SimpleHTTPRequestHandler):
                     save_data(data)
                     return self.send_json(201, created[0])
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
+                case_file = payload.pop("caseFile", None) if collection in {"cases", "correspondence"} else None
+                case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
                 item = {"id": str(uuid.uuid4()), **clean(payload), "createdAt": now()}
                 item["createdByUserId"] = user["id"]
                 item["createdByName"] = user["displayName"]
                 if receipt_image:
                     item["receiptFile"] = save_receipt(receipt_image)
                     item["receiptStatus"] = "available"
+                if case_file:
+                    item.update(save_case_file(case_file, str(case_file_name)))
                 if collection == "ledger":
                     for field, key in (("description", "descriptions"), ("category", "categories")):
                         value = item.get(field)
@@ -459,11 +508,18 @@ class Handler(SimpleHTTPRequestHandler):
                     choices = data.setdefault("taskOptions", {}).setdefault("categories", [])
                     if category and category not in choices: choices.append(category)
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
+                case_file = payload.pop("caseFile", None) if collection in {"cases", "correspondence"} else None
+                case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
                 data[collection][index].update(clean(payload))
                 data[collection][index]["updatedByUserId"] = user["id"]
                 if receipt_image:
                     data[collection][index]["receiptFile"] = save_receipt(receipt_image)
                     data[collection][index]["receiptStatus"] = "available"
+                if case_file:
+                    old_attachment = data[collection][index].get("attachmentFile")
+                    data[collection][index].update(save_case_file(case_file, str(case_file_name)))
+                    if old_attachment:
+                        (CASE_FILES_DIR / Path(old_attachment).name).unlink(missing_ok=True)
                 elif collection == "ledger" and data[collection][index].get("receiptStatus") == "none":
                     old_receipt = data[collection][index].pop("receiptFile", None)
                     data[collection][index].pop("receipt", None)
@@ -485,7 +541,9 @@ class Handler(SimpleHTTPRequestHandler):
                     task["deletedByName"] = user["displayName"]
                     save_data(data)
                     return self.send_json(200, {"ok": True, "pendingAdminConfirmation": True})
-                data[collection].pop(index)
+                removed = data[collection].pop(index)
+                if collection in {"cases", "correspondence"} and removed.get("attachmentFile"):
+                    (CASE_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
                 save_data(data)
                 return self.send_json(200, {"ok": True})
         return self.send_json(405, {"error": "Methode nicht erlaubt."})

@@ -44,6 +44,20 @@
 .task-history { color: var(--muted); font-size: .8rem; margin-top: 8px; }
 .task-history summary { color: var(--green); cursor: pointer; font-weight: 700; }
 .task-history ul { margin: 7px 0 0; padding-left: 18px; }
+.case-list { display: grid; gap: 20px; }
+.case-card { padding: 0; overflow: hidden; }
+.case-summary { align-items: center; display: grid; gap: 20px; grid-template-columns: minmax(220px, 1.5fr) 1fr 1fr auto; padding: 24px; }
+.case-summary h2 { margin: 3px 0 7px; }
+.case-summary p { color: var(--muted); margin-bottom: 4px; }
+.case-actions { border-top: 1px solid var(--line); display: flex; gap: 9px; padding: 12px 24px; }
+.correspondence, .child-cases { background: #fafaf7; border-top: 1px solid var(--line); padding: 20px 24px; }
+.correspondence > h3, .child-cases > h3 { font-size: .8rem; letter-spacing: .1em; margin-bottom: 12px; text-transform: uppercase; }
+.correspondence-item { align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; display: flex; gap: 14px; margin-top: 8px; padding: 14px; }
+.correspondence-item p { color: var(--muted); margin: 3px 0; }
+.correspondence-item time { color: var(--muted); font-size: .82rem; }
+.correspondence-direction { background: var(--green-soft); border-radius: 999px; color: var(--green); font-size: .7rem; font-weight: 800; padding: 5px 9px; }
+.case-file { color: var(--green); display: inline-block; font-size: .8rem; font-weight: 700; margin-top: 6px; text-decoration: none; }
+.child-cases > .case-card { border-left: 4px solid var(--purple); margin-top: 12px; }
 
 .receipt-link {
   display: block;
@@ -78,6 +92,7 @@
 @media (max-width: 1100px) {
   .account-balances { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .case-summary { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 600px) {
@@ -86,6 +101,9 @@
   .balance-actions { display: flex; margin-left: 0; width: 100%; }
   .balance-actions button { flex: 1; }
   .task-filters { grid-template-columns: 1fr; }
+  .case-summary { grid-template-columns: 1fr; }
+  .case-actions { flex-direction: column; }
+  .correspondence-item { align-items: flex-start; flex-wrap: wrap; }
 }
 
 @media print {

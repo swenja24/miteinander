@@ -11,10 +11,11 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Dokumentenregister mit Zuordnung zu Anträgen
 - Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
 - Familienbereich mit beteiligten Personen und Rollen
+- Antragsakten mit Ergänzungsanträgen, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Responsive, tastaturbedienbare Oberfläche
 
-> Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dokumente werden zunächst als Registereinträge mit Ablageort erfasst; ein verschlüsselter Datei-Upload ist noch nicht enthalten.
+> Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
 
 ## Schnellstart mit Docker Compose
 
@@ -55,7 +56,7 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 
 ## Backup und Wiederherstellung
 
-Alle Nutzdaten stehen in `/app/data/familie.json`; hochgeladene Belegbilder liegen unter `/app/data/receipts`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
+Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts` und Dateien aus Antragsakten unter `/app/data/case-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
 
 ```bash
 docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \

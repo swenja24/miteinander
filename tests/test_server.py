@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-6', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-6") as response:
+            self.assertIn('/app.js?v=20260715-7', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-7") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -63,6 +63,34 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(self.temp.name, "familie.json"), encoding="utf-8") as file:
             stored = json.loads(file.read())
         self.assertEqual(stored["tasks"][0]["title"], "Bescheid prüfen")
+
+    def test_case_file_correspondence_and_supplementary_application(self):
+        cookie = self.login()
+        _, initial = self.call("/api/data", cookie=cookie)
+        pdf = base64.b64encode(b"%PDF-1.4\nTestbrief").decode()
+        _, application = self.call("/api/cases", "POST", {
+            "title": "Antrag auf Assistenz", "authority": "Sozialamt",
+            "assignee": initial["members"][0]["id"], "status": "submitted",
+            "caseFile": "data:application/pdf;base64," + pdf, "caseFileName": "Antrag.pdf",
+        }, cookie)
+        self.assertEqual(application["status"], "submitted")
+        self.assertEqual(application["attachmentType"], "application/pdf")
+        _, child = self.call("/api/cases", "POST", {
+            "title": "Ergänzung Hilfsmittel", "parentCaseId": application["id"], "status": "draft",
+        }, cookie)
+        self.assertEqual(child["parentCaseId"], application["id"])
+        _, letter = self.call("/api/correspondence", "POST", {
+            "caseId": application["id"], "direction": "incoming", "date": date.today().isoformat(),
+            "subject": "Rückfrage der Behörde", "caseFile": "data:application/pdf;base64," + pdf,
+            "caseFileName": "Rueckfrage.pdf",
+        }, cookie)
+        self.assertEqual(letter["caseId"], application["id"])
+        request = urllib.request.Request("http://127.0.0.1:8765/api/case-files/" + letter["attachmentFile"], headers={"Cookie": cookie})
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.headers.get_content_type(), "application/pdf")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen("http://127.0.0.1:8765/api/case-files/" + letter["attachmentFile"])
+        self.assertEqual(error.exception.code, 401)
 
     def test_recurring_tasks_history_past_guard_and_soft_delete(self):
         admin_cookie = self.login()

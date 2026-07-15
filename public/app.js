@@ -51,7 +51,12 @@ function dashboard(){
   ${caps.cases?`<div class="card"><div class="card-head"><h2>Laufende Anträge</h2><a class="link-btn" href="#cases">Alle ansehen</a></div><div class="item-list">${state.cases.slice(0,4).map(c=>`<div class="list-item"><span class="bubble green">◇</span><div class="grow"><strong>${esc(c.title)}</strong><small>${esc(c.authority||'Keine Behörde angegeben')}</small></div><span class="status ${statusClass(c.status)}">${esc(statusLabel(c.status))}</span></div>`).join('')||empty('Lege den ersten Antrag an.')}</div></div>`:''}</section>`;
 }
 
-function casesPage(){return `${header('Anträge & Behörden','Anträge','Jeder Antrag mit Status, Frist und Zuständigkeit.',`<button class="primary" data-add="case">+ Neuer Antrag</button>`)}<div class="card data-card">${state.cases.map(c=>`<article class="data-row"><div><h3>${esc(c.title)}</h3><p>${esc(c.description||'Keine Notiz')}</p></div><div><strong>${esc(c.authority||'–')}</strong><p>Behörde / Kontakt</p></div><div><span class="status ${statusClass(c.status)}">${esc(statusLabel(c.status))}</span><p>${formatDate(c.due)}</p></div><div class="row-actions"><button class="icon-btn" data-edit="case" data-id="${c.id}" aria-label="Antrag bearbeiten">✎</button><button class="icon-btn danger" data-delete="cases" data-id="${c.id}" aria-label="Antrag löschen">×</button></div></article>`).join('')||empty('Noch kein Antrag vorhanden.')}</div>`;}
+function attachmentLink(item){return item.attachmentFile?`<a class="case-file" href="/api/case-files/${encodeURIComponent(item.attachmentFile)}" target="_blank">▤ ${esc(item.attachmentName||'Dokument öffnen')}</a>`:'';}
+function casesPage(){
+  const topLevel=state.cases.filter(c=>!c.parentCaseId);
+  const caseCard=c=>{const children=state.cases.filter(child=>child.parentCaseId===c.id);const correspondence=state.correspondence.filter(entry=>entry.caseId===c.id).sort((a,b)=>(b.date||b.createdAt).localeCompare(a.date||a.createdAt));return `<article class="card case-card"><div class="case-summary"><div><p class="eyebrow">${c.parentCaseId?'Ergänzungsantrag':'Antrag'}</p><h2>${esc(c.title)}</h2><p>${esc(c.description||'Keine Notiz')}</p>${attachmentLink(c)}</div><div><strong>${esc(c.authority||'Keine Behörde angegeben')}</strong><p>${esc(memberName(c.assignee))} · verantwortlich</p></div><div><span class="status ${statusClass(c.status)}">${esc(statusLabel(c.status))}</span><p>${formatDate(c.due)}</p></div><div class="row-actions"><button class="icon-btn" data-edit="case" data-id="${c.id}" aria-label="Antrag bearbeiten">✎</button><button class="icon-btn danger" data-delete="cases" data-id="${c.id}" aria-label="Antrag löschen">×</button></div></div><div class="case-actions"><button class="secondary" data-add-correspondence="${c.id}">+ Korrespondenz</button><button class="secondary" data-add-child-case="${c.id}">+ Ergänzungsantrag</button></div>${correspondence.length?`<section class="correspondence"><h3>Korrespondenz</h3>${correspondence.map(entry=>`<article class="correspondence-item"><span class="correspondence-direction">${esc(({incoming:'Eingang',outgoing:'Ausgang',internal:'Interne Notiz'}[entry.direction]||'Korrespondenz'))}</span><div class="grow"><strong>${esc(entry.subject)}</strong><p>${esc(entry.notes||'Keine Notiz')}</p>${attachmentLink(entry)}</div><time>${formatDate(entry.date)}</time><div class="row-actions"><button class="icon-btn" data-edit="correspondence" data-id="${entry.id}">✎</button><button class="icon-btn danger" data-delete="correspondence" data-id="${entry.id}">×</button></div></article>`).join('')}</section>`:''}${children.length?`<section class="child-cases"><h3>Ergänzungsanträge</h3>${children.map(caseCard).join('')}</section>`:''}</article>`;};
+  return `${header('Anträge & Behörden','Anträge','Anträge, Ergänzungen und Schriftverkehr als zusammenhängende Akte.',`<button class="primary" data-add="case">+ Neuer Antrag</button>`)}<div class="case-list">${topLevel.map(caseCard).join('')||empty('Noch kein Antrag vorhanden.')}</div>`;
+}
 function tasksPage(){
   const nextWeek=new Date();nextWeek.setDate(nextWeek.getDate()+7);const nextWeekValue=nextWeek.toISOString().slice(0,10);
   const matchesDue=t=>t.deletedAt||((taskFilters.due==='all'&&(!t.due||t.due>=today()))||(taskFilters.due==='past'&&t.due&&t.due<today())||(taskFilters.due==='overdue'&&t.due&&t.due<today()&&!['done','refused'].includes(t.status))||(taskFilters.due==='today'&&t.due===today())||(taskFilters.due==='week'&&t.due>=today()&&t.due<=nextWeekValue)||(taskFilters.due==='none'&&!t.due));
@@ -83,7 +88,8 @@ function accessSection(){
 function familyPage(){return `${header('Zusammenarbeit','Familie','Wer arbeitet mit und darf Aufgaben übernehmen?',`<button class="primary" data-add="member">+ Neue Person</button>`)}<section class="card"><h2 class="section-title" style="margin-top:0">Familienbereich</h2><form id="family-form" class="form-grid"><div><label>Name des Bereichs</label><input name="name" value="${esc(state.family.name)}"></div><div><label>Name der leistungsberechtigten Person</label><input name="person" value="${esc(state.family.person)}"></div><div class="full form-actions"><button class="primary">Änderungen speichern</button></div></form></section><h2 class="section-title">Beteiligte Personen</h2><div class="member-grid">${state.members.map(m=>`<article class="card member"><div class="avatar" style="background:${esc(m.color)}">${esc(m.name.slice(0,1).toUpperCase())}</div><div class="grow"><strong>${esc(m.name)}</strong><small>${esc(m.role)}</small></div><button class="icon-btn" data-edit="member" data-id="${m.id}">✎</button></article>`).join('')}</div>${accessSection()}`;}
 
 const configs={
-  case:{collection:'cases',title:'Antrag',newTitle:'Neuer Antrag',fields:[['title','Titel','text'],['authority','Behörde / Kontakt','text'],['status','Status','select','draft:Entwurf|collecting:Unterlagen sammeln|submitted:Eingereicht|question:Rückfrage|approved:Bewilligt|done:Erledigt'],['due','Nächste Frist','date'],['description','Notiz','textarea']]},
+  case:{collection:'cases',title:'Antrag',newTitle:'Neuer Antrag',fields:[['title','Titel','text'],['authority','Behörde / Kontakt','text'],['assignee','Verantwortlich','members'],['status','Status','select','draft:Entwurf|collecting:Unterlagen sammeln|submitted:Eingereicht|question:Rückfrage|approved:Bewilligt|done:Erledigt'],['due','Nächste Frist','date'],['parentCaseId','Zugehöriger Hauptantrag (optional)','cases'],['caseFileInput','Brief fotografieren oder PDF/Bild hochladen','casefile'],['description','Notiz','textarea']]},
+  correspondence:{collection:'correspondence',title:'Korrespondenz',newTitle:'Neue Korrespondenz',fields:[['caseId','Zugehöriger Antrag','cases'],['direction','Richtung','select','incoming:Eingang von Behörde|outgoing:Ausgang an Behörde|internal:Interne Notiz'],['date','Datum','date'],['subject','Betreff','text'],['caseFileInput','Brief fotografieren oder PDF/Bild hochladen','casefile'],['notes','Notiz','textarea']]},
   task:{collection:'tasks',title:'Aufgabe',newTitle:'Neue Aufgabe',fields:[['title','Aufgabe','text'],['category','Kategorie','taskSuggestions','categories'],['assignee','Verantwortlich','members'],['due','Fällig am','date'],['status','Status','select','planned:Geplant|open:Offen|done:Erledigt|refused:Linea wollte nicht'],['recurrence','Aufgabentyp','select','once:Einmalige Aufgabe|weekly:Wöchentlich wiederkehrend|biweekly:Alle zwei Wochen|monthly:Monatlich wiederkehrend|yearly:Jährlich wiederkehrend'],['recurrenceUntil','Wiederholen bis (optional)','date'],['notes','Notiz','textarea']]},
   document:{collection:'documents',title:'Dokument',newTitle:'Neues Dokument',fields:[['title','Dokumentname','text'],['category','Kategorie','select','Antrag:Antrag|Bescheid:Bescheid|Schriftverkehr:Schriftverkehr|Nachweis:Nachweis|Sonstiges:Sonstiges'],['date','Datum','date'],['caseId','Zugehöriger Antrag','cases'],['location','Ablageort / Aktenzeichen','text'],['notes','Notiz','textarea']]},
   ledger:{collection:'ledger',title:'Buchung',newTitle:'Neue Buchung',fields:[['description','Beschreibung','suggestions','descriptions'],['accountId','Konto','accounts'],['type','Art','select','expense:Ausgabe|income:Einnahme'],['amount','Betrag in Euro','money'],['date','Datum','date'],['category','Kategorie','suggestions','categories'],['payee','Empfänger / Quelle','text'],['receiptStatus','Beleg','select','available:Beleg vorhanden|none:Kein Beleg vorhanden'],['receipt','Belegnummer (optional)','text'],['receiptImage','Rechnung fotografieren oder hochladen','image'],['notes','Notiz','textarea']]},
@@ -110,8 +116,14 @@ function receiptDataUrl(file){
     reader.readAsDataURL(file);
   });
 }
-function openForm(type,id){
-  const c=configs[type],item=id?state[c.collection].find(x=>x.id===id):{};
+function caseFileDataUrl(file){
+  if(file.type.startsWith('image/'))return receiptDataUrl(file);
+  if(file.type!=='application/pdf')return Promise.reject(new Error('Bitte wähle ein Bild oder eine PDF-Datei aus.'));
+  if(file.size>5_000_000)return Promise.reject(new Error('Die PDF-Datei darf höchstens 5 MB groß sein.'));
+  return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Die Datei konnte nicht gelesen werden.'));reader.onload=()=>resolve(reader.result);reader.readAsDataURL(file);});
+}
+function openForm(type,id,defaults={}){
+  const c=configs[type],item=id?state[c.collection].find(x=>x.id===id):{...defaults};
   if(type==='ledger'&&!item.receiptStatus) item.receiptStatus=item.receiptFile||item.receipt?'available':'none';
   const fields=c.fields.map(([name,label,kind,spec])=>{
     let input;
@@ -119,13 +131,14 @@ function openForm(type,id){
     else if(kind==='select') input=`<select name="${name}">${options(spec,item[name])}</select>`;
     else if(kind==='members') input=`<select name="${name}"><option value="">Nicht zugewiesen</option>${state.members.map(m=>`<option value="${m.id}" ${m.id===item[name]?'selected':''}>${esc(m.name)}</option>`)}</select>`;
     else if(kind==='accounts') input=`<select name="${name}" required>${state.accounts.map(a=>`<option value="${a.id}" ${a.id===(item[name]||state.accounts[0]?.id)?'selected':''}>${esc(a.name)}</option>`)}</select>`;
-    else if(kind==='cases') input=`<select name="${name}"><option value="">Kein Antrag</option>${state.cases.map(x=>`<option value="${x.id}" ${x.id===item[name]?'selected':''}>${esc(x.title)}</option>`)}</select>`;
+    else if(kind==='cases') input=`<select name="${name}"><option value="">Kein Antrag</option>${state.cases.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${x.id===item[name]?'selected':''}>${esc(x.title)}</option>`)}</select>`;
     else if(kind==='image') input=`<input name="${name}" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small class="field-help">Du kannst die Kamera öffnen oder ein vorhandenes Foto auswählen.${item.receiptFile?' Ein Beleg ist bereits hinterlegt.':''}</small>`;
+    else if(kind==='casefile') input=`<input name="${name}" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"><small class="field-help">Du kannst auf dem Smartphone einen Brief fotografieren oder ein Bild beziehungsweise eine PDF-Datei auswählen.${item.attachmentFile?' Ein Dokument ist bereits hinterlegt und wird bei einer neuen Auswahl ersetzt.':''}</small>`;
     else if(kind==='suggestions') input=`<input name="${name}" list="ledger-${spec}" value="${esc(item[name]||'')}" ${name==='description'?'required':''}><datalist id="ledger-${spec}">${(state.ledgerOptions?.[spec]||[]).map(value=>`<option value="${esc(value)}">`).join('')}</datalist><button type="button" class="suggestion-edit" data-manage-suggestions="${spec}">Vorschläge bearbeiten</button>`;
     else if(kind==='taskSuggestions') input=`<input name="${name}" list="task-${spec}" value="${esc(item[name]||'')}"><datalist id="task-${spec}">${(state.taskOptions?.[spec]||[]).map(value=>`<option value="${esc(value)}">`).join('')}</datalist><button type="button" class="suggestion-edit" data-manage-task-suggestions="${spec}">Vorschläge bearbeiten</button>`;
     else if(kind==='money') input=`<input name="${name}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(item[name]??'')}" required>`;
-    else input=`<input name="${name}" type="${kind}" value="${esc(item[name]??(kind==='date'?today():kind==='color'?'#285c4d':''))}" ${name==='title'||name==='description'&&type==='ledger'||name==='name'&&type==='account'?'required':''}>`;
-    return `<div class="${['textarea','image'].includes(kind)?'full':''}"><label>${label}</label>${input}</div>`;
+    else input=`<input name="${name}" type="${kind}" value="${esc(item[name]??(kind==='date'?today():kind==='color'?'#285c4d':''))}" ${name==='title'||name==='subject'||name==='description'&&type==='ledger'||name==='name'&&type==='account'?'required':''}>`;
+    return `<div class="${['textarea','image','casefile'].includes(kind)?'full':''}"><label>${label}</label>${input}</div>`;
   }).join('');
   $('#modal-content').innerHTML=`<h2>${id?c.title+' bearbeiten':c.newTitle}</h2><form id="entry-form" class="form-grid">${fields}<div class="full form-actions"><button type="button" class="secondary" data-close>Abbrechen</button><button class="primary">Speichern</button></div></form>`;
   $('#modal').showModal();$('[data-close]').onclick=()=>$('#modal').close();
@@ -151,10 +164,12 @@ function openForm(type,id){
   $('[name="receiptStatus"]',$('#entry-form'))?.addEventListener('change',updateReceiptFields);updateReceiptFields();
   $('#entry-form').onsubmit=async e=>{
     e.preventDefault();
-    const formData=new FormData(e.target),file=formData.get('receiptImage');
+    const formData=new FormData(e.target),file=formData.get('receiptImage'),caseFile=formData.get('caseFileInput');
     formData.delete('receiptImage');
+    formData.delete('caseFileInput');
     const payload=Object.fromEntries(formData);
     if(file?.size) payload.receiptImage=await receiptDataUrl(file);
+    if(caseFile?.size){payload.caseFile=await caseFileDataUrl(caseFile);payload.caseFileName=caseFile.name;}
     await request(`/api/${c.collection}${id?'/'+id:''}`,{method:id?'PUT':'POST',body:JSON.stringify(payload)});
     $('#modal').close();await refresh();toast('Gespeichert.');
   };
@@ -184,6 +199,8 @@ function visibleLedger(){const selected=ledgerAccounts.has('__none__')?new Set()
 function exportCsv(){const rows=[['Datum','Konto','Art','Beschreibung','Kategorie','Empfänger/Quelle','Eingetragen von','Beleg','Belegbild','Betrag EUR'],...visibleLedger().map(x=>[x.date,accountName(x.accountId),x.type==='income'?'Einnahme':'Ausgabe',x.description,x.category,x.payee,userName(x.createdByUserId,x.createdByName),x.receiptStatus==='none'?'Kein Beleg':x.receipt,x.receiptFile?'Vorhanden':'',(x.type==='income'?1:-1)*Number(x.amount||0)])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`kassenbuch-${today()}.csv`;a.click();URL.revokeObjectURL(a.href);}
 function bind(){
   $$('[data-add]').forEach(b=>b.onclick=()=>openForm(b.dataset.add));$$('[data-edit]').forEach(b=>b.onclick=()=>openForm(b.dataset.edit,b.dataset.id));
+  $$('[data-add-correspondence]').forEach(button=>button.onclick=()=>openForm('correspondence',null,{caseId:button.dataset.addCorrespondence}));
+  $$('[data-add-child-case]').forEach(button=>button.onclick=()=>openForm('case',null,{parentCaseId:button.dataset.addChildCase}));
   $$('[data-delete]').forEach(b=>b.onclick=async()=>{const final=b.textContent.includes('Endgültig');if(confirm(final?'Diese Aufgabe endgültig und unwiderruflich löschen?':'Diesen Eintrag wirklich löschen?')){const result=await request(`/api/${b.dataset.delete}/${b.dataset.id}`,{method:'DELETE'});await refresh();toast(result.pendingAdminConfirmation?'Zur Löschbestätigung vorgemerkt.':'Gelöscht.');}});
   $('[data-export="csv"]')?.addEventListener('click',exportCsv);$('[data-export="print"]')?.addEventListener('click',()=>window.print());
   $('[data-account-all]')?.addEventListener('change',e=>{ledgerAccounts=e.target.checked?new Set():new Set(['__none__']);render();});
