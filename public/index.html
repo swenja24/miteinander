@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f7f5ef">
   <title>Miteinander – Eingliederungshilfe organisieren</title>
+  <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ledger.css">
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -15,12 +17,14 @@
       <h1>Willkommen bei<br><em>Miteinander</em></h1>
       <p class="lede">Anträge, Fristen, Unterlagen und Ausgaben an einem ruhigen Ort.</p>
       <form id="login-form">
-        <label for="password">Familien-Passwort</label>
+        <label for="username">Benutzername</label>
+        <input id="username" name="username" autocomplete="username" value="linea" required>
+        <label for="password">Passwort</label>
         <div class="password-row"><input id="password" type="password" autocomplete="current-password" required><button type="button" class="icon-btn" id="show-password" aria-label="Passwort anzeigen">◉</button></div>
         <p id="login-error" class="error" role="alert"></p>
         <button class="primary wide" type="submit">Sicher anmelden <span>→</span></button>
       </form>
-      <p class="privacy-note">Ihre Daten bleiben auf Ihrem eigenen Server.</p>
+      <p class="privacy-note">Deine Daten bleiben auf deinem eigenen Server.</p>
     </main>
   </div>
 
@@ -29,7 +33,7 @@
       <a href="#dashboard" class="logo" aria-label="Miteinander Startseite"><span>M</span><strong>Miteinander</strong></a>
       <nav aria-label="Hauptnavigation">
         <a href="#dashboard" data-page="dashboard"><span>⌂</span> Überblick</a>
-        <a href="#cases" data-page="cases"><span>◇</span> Vorgänge</a>
+        <a href="#cases" data-page="cases"><span>◇</span> Anträge</a>
         <a href="#tasks" data-page="tasks"><span>✓</span> Aufgaben</a>
         <a href="#documents" data-page="documents"><span>▤</span> Dokumente</a>
         <a href="#ledger" data-page="ledger"><span>€</span> Kassenbuch</a>

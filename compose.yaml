@@ -8,7 +8,6 @@ services:
       - "3080:3000"
     environment:
       APP_PASSWORD: "${APP_PASSWORD:?APP_PASSWORD muss in .env gesetzt sein}"
-      SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET muss in .env gesetzt sein}"
       TZ: "Europe/Berlin"
     volumes:
       - miteinander_data:/app/data

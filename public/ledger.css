@@ -1,0 +1,77 @@
+.account-balances {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.account-balances .mini-stat strong {
+  font-size: 1.15rem;
+}
+
+.account-balances .mini-stat small {
+  display: block;
+  line-height: 1.25;
+}
+
+.balance-actions {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.filter-label {
+  min-width: min(100%, 340px);
+}
+
+.filter-label select {
+  margin-top: 7px;
+  width: 100%;
+}
+
+.field-help {
+  display: block;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 7px;
+}
+
+.receipt-link {
+  display: block;
+  color: var(--green);
+  font-size: .76rem;
+  font-weight: 700;
+  margin-top: 5px;
+  text-decoration: none;
+}
+
+#login-form > label:not(:first-of-type) { margin-top: 16px; }
+.hero > .welcome:only-child, .grid-2 > .card:only-child { grid-column: 1 / -1; }
+
+.access-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 30px;
+}
+
+.access-head .section-title { margin: 0; }
+.access-note { color: var(--muted); margin: 10px 0 16px; }
+.user-card { display: grid; gap: 14px; }
+.user-card small { color: var(--muted); display: block; margin-top: 3px; }
+.permission-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.permissions { border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.permissions legend { font-weight: 700; padding: 0 6px; }
+.permissions label { align-items: center; display: flex; gap: 7px; margin: 9px 0; }
+.permissions input { width: auto; }
+.permissions small { color: var(--muted); display: block; margin-top: 12px; }
+
+@media (max-width: 1100px) {
+  .account-balances { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .account-balances { grid-template-columns: 1fr; }
+  .balance { align-items: flex-start; flex-direction: column; }
+  .balance-actions { display: flex; margin-left: 0; width: 100%; }
+  .balance-actions button { flex: 1; }
+}

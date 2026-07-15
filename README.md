@@ -6,12 +6,12 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 
 ## Enthalten
 
-- Vorgänge für Anträge und Behördenkontakte mit Status und Fristen
+- Anträge und Behördenkontakte mit Status und Fristen
 - Aufgaben, Zuständigkeiten und Fälligkeiten
-- Dokumentenregister mit Zuordnung zu Vorgängen
-- Digitales Kassenbuch mit CSV-Export für Excel und druckbarer PDF-Ansicht
+- Dokumentenregister mit Zuordnung zu Anträgen
+- Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
 - Familienbereich mit beteiligten Personen und Rollen
-- Lokale Anmeldung und persistente Datenspeicherung
+- Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Responsive, tastaturbedienbare Oberfläche
 
 > Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dokumente werden zunächst als Registereinträge mit Ablageort erfasst; ein verschlüsselter Datei-Upload ist noch nicht enthalten.
@@ -19,7 +19,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 ## Schnellstart mit Docker Compose
 
 1. `compose.yaml` und `.env.example` auf den Docker-Host kopieren.
-2. `.env.example` nach `.env` kopieren und `GHCR_IMAGE`, `APP_PASSWORD` und `SESSION_SECRET` ändern. Einen Secret-Wert kann man mit `openssl rand -hex 32` erzeugen.
+2. `.env.example` nach `.env` kopieren und `GHCR_IMAGE` sowie `APP_PASSWORD` ändern.
 3. Starten:
 
    ```bash
@@ -45,7 +45,7 @@ Für ein Rollback in `compose.yaml` statt `:latest` den vorherigen Commit-Tag ei
 
 ## Deployment mit Arcane
 
-In Arcane einen neuen Stack mit `compose.yaml` anlegen und die drei Variablen aus `.env.example` als Stack-Umgebungsvariablen konfigurieren. `GHCR_IMAGE` muss vollständig und kleingeschrieben sein, beispielsweise `ghcr.io/mein-name/miteinander`.
+In Arcane einen neuen Stack mit `compose.yaml` anlegen und die Variablen aus `.env.example` als Stack-Umgebungsvariablen konfigurieren. `GHCR_IMAGE` muss vollständig und kleingeschrieben sein, beispielsweise `ghcr.io/mein-name/miteinander`.
 
 Für ein Update in Arcane das neue `latest`-Image ziehen und den Stack neu bereitstellen. `pull_policy: always` sorgt dafür, dass beim Deployment nicht versehentlich der lokale Cache verwendet wird. Das Daten-Volume bleibt dabei erhalten.
 
@@ -55,7 +55,7 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 
 ## Backup und Wiederherstellung
 
-Alle Nutzdaten stehen in `/app/data/familie.json` im Volume. Backup des Volumes:
+Alle Nutzdaten stehen in `/app/data/familie.json`; hochgeladene Belegbilder liegen unter `/app/data/receipts`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
 
 ```bash
 docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
@@ -74,7 +74,7 @@ docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
 Es werden keine externen Python-Pakete benötigt.
 
 ```bash
-APP_PASSWORD=entwicklung SESSION_SECRET=lokales-secret python3 server.py
+APP_PASSWORD=entwicklung python3 server.py
 ```
 
 Danach ist die App unter `http://localhost:3000` erreichbar.
@@ -87,7 +87,9 @@ docker build -t miteinander:dev .
 
 ## Sicherheit vor produktivem Einsatz
 
-- Starkes, individuelles Passwort und zufälliges Session-Secret setzen.
+- Ein starkes Startpasswort über `APP_PASSWORD` setzen.
+- Der erste Zugang heißt `linea` und verwendet beim ersten Start `APP_PASSWORD`. Weitere Zugänge und Bereichsrechte werden in der Familienansicht angelegt.
+- Für jede Person einen eigenen Zugang verwenden; Passwörter nicht gemeinsam nutzen.
 - HTTPS über einen Reverse Proxy aktivieren.
 - Docker-Volume regelmäßig verschlüsselt sichern.
 - Zugriff auf den Familienkreis und bei Bedarf VPN/LAN beschränken.
@@ -96,3 +98,6 @@ docker build -t miteinander:dev .
 ## Lizenz
 
 Miteinander ist Open Source und steht unter der [MIT-Lizenz](LICENSE).
+
+Die mitgelieferte Schriftfamilie Carlito steht separat unter der
+[SIL Open Font License 1.1](public/fonts/OFL.txt).
