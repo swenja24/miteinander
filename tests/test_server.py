@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-8', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-8") as response:
+            self.assertIn('/app.js?v=20260716-1', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-1") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -63,6 +63,22 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(self.temp.name, "familie.json"), encoding="utf-8") as file:
             stored = json.loads(file.read())
         self.assertEqual(stored["tasks"][0]["title"], "Bescheid prüfen")
+
+    def test_document_scan_or_pdf_upload_is_protected(self):
+        cookie = self.login()
+        pdf = base64.b64encode(b"%PDF-1.4\nDokument").decode()
+        _, document = self.call("/api/documents", "POST", {
+            "title": "Pflegebescheid", "category": "Bescheid", "date": date.today().isoformat(),
+            "documentFile": "data:application/pdf;base64," + pdf,
+            "documentFileName": "Pflegebescheid.pdf",
+        }, cookie)
+        self.assertEqual(document["attachmentName"], "Pflegebescheid.pdf")
+        request = urllib.request.Request("http://127.0.0.1:8765/api/document-files/" + document["attachmentFile"], headers={"Cookie": cookie})
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.headers.get_content_type(), "application/pdf")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen("http://127.0.0.1:8765/api/document-files/" + document["attachmentFile"])
+        self.assertEqual(error.exception.code, 401)
 
     def test_case_file_correspondence_and_supplementary_application(self):
         cookie = self.login()

@@ -26,6 +26,7 @@ PASSWORD = os.getenv("APP_PASSWORD", "miteinander")
 MAX_BODY = 8_000_000
 RECEIPTS_DIR = DATA_DIR / "receipts"
 CASE_FILES_DIR = DATA_DIR / "case-files"
+DOCUMENT_FILES_DIR = DATA_DIR / "document-files"
 COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -80,6 +81,7 @@ def load_data() -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
     CASE_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    DOCUMENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         loaded = json.loads(DATA_FILE.read_text("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -149,7 +151,7 @@ def save_receipt(data_url: str) -> str:
     return filename
 
 
-def save_case_file(data_url: str, original_name: str = "Dokument") -> dict:
+def save_uploaded_file(data_url: str, original_name: str, directory: Path) -> dict:
     if not data_url.startswith("data:") or ";base64," not in data_url:
         raise ValueError("Ungültige Datei")
     header, encoded = data_url.split(",", 1)
@@ -161,8 +163,16 @@ def save_case_file(data_url: str, original_name: str = "Dokument") -> dict:
     if len(content) > 5_000_000:
         raise ValueError("Die Datei ist zu groß (maximal 5 MB)")
     filename = f"{uuid.uuid4()}{extensions[media_type]}"
-    (CASE_FILES_DIR / filename).write_bytes(content)
+    (directory / filename).write_bytes(content)
     return {"attachmentFile": filename, "attachmentName": clean(original_name) or "Dokument", "attachmentType": media_type}
+
+
+def save_case_file(data_url: str, original_name: str = "Dokument") -> dict:
+    return save_uploaded_file(data_url, original_name, CASE_FILES_DIR)
+
+
+def save_document_file(data_url: str, original_name: str = "Dokument") -> dict:
+    return save_uploaded_file(data_url, original_name, DOCUMENT_FILES_DIR)
 
 
 def clean(value):
@@ -379,6 +389,25 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+        if path.startswith("/api/document-files/") and method == "GET":
+            if not self.allowed(user, "documents"):
+                return self.send_json(403, {"error": "Kein Zugriff auf Dokumente."})
+            filename = path.rsplit("/", 1)[-1]
+            if not filename or filename != Path(filename).name:
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            attachment = DOCUMENT_FILES_DIR / filename
+            if not attachment.is_file():
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            content = attachment.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f"inline; filename={filename}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if path == "/api/family" and method == "PUT":
             if not self.allowed(user, "family"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
@@ -500,6 +529,8 @@ class Handler(SimpleHTTPRequestHandler):
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
                 case_file = payload.pop("caseFile", None) if collection in {"cases", "correspondence"} else None
                 case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
+                document_file = payload.pop("documentFile", None) if collection == "documents" else None
+                document_file_name = payload.pop("documentFileName", "Dokument") if collection == "documents" else "Dokument"
                 item = {"id": str(uuid.uuid4()), **clean(payload), "createdAt": now()}
                 item["createdByUserId"] = user["id"]
                 item["createdByName"] = user["displayName"]
@@ -508,6 +539,8 @@ class Handler(SimpleHTTPRequestHandler):
                     item["receiptStatus"] = "available"
                 if case_file:
                     item.update(save_case_file(case_file, str(case_file_name)))
+                if document_file:
+                    item.update(save_document_file(document_file, str(document_file_name)))
                 if collection == "correspondence":
                     sync_deadline_reminder(item, user)
                 if collection == "ledger":
@@ -539,6 +572,8 @@ class Handler(SimpleHTTPRequestHandler):
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
                 case_file = payload.pop("caseFile", None) if collection in {"cases", "correspondence"} else None
                 case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
+                document_file = payload.pop("documentFile", None) if collection == "documents" else None
+                document_file_name = payload.pop("documentFileName", "Dokument") if collection == "documents" else "Dokument"
                 data[collection][index].update(clean(payload))
                 data[collection][index]["updatedByUserId"] = user["id"]
                 if receipt_image:
@@ -549,6 +584,11 @@ class Handler(SimpleHTTPRequestHandler):
                     data[collection][index].update(save_case_file(case_file, str(case_file_name)))
                     if old_attachment:
                         (CASE_FILES_DIR / Path(old_attachment).name).unlink(missing_ok=True)
+                if document_file:
+                    old_attachment = data[collection][index].get("attachmentFile")
+                    data[collection][index].update(save_document_file(document_file, str(document_file_name)))
+                    if old_attachment:
+                        (DOCUMENT_FILES_DIR / Path(old_attachment).name).unlink(missing_ok=True)
                 if collection == "correspondence":
                     sync_deadline_reminder(data[collection][index], user)
                 elif collection == "ledger" and data[collection][index].get("receiptStatus") == "none":
@@ -577,6 +617,8 @@ class Handler(SimpleHTTPRequestHandler):
                     data["tasks"] = [task for task in data["tasks"] if task.get("id") != removed["reminderTaskId"]]
                 if collection in {"cases", "correspondence"} and removed.get("attachmentFile"):
                     (CASE_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
+                if collection == "documents" and removed.get("attachmentFile"):
+                    (DOCUMENT_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
                 save_data(data)
                 return self.send_json(200, {"ok": True})
         return self.send_json(405, {"error": "Methode nicht erlaubt."})

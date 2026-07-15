@@ -56,7 +56,7 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 
 ## Backup und Wiederherstellung
 
-Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts` und Dateien aus Antragsakten unter `/app/data/case-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
+Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files` und hochgeladene Dokumente unter `/app/data/document-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
 
 ```bash
 docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
