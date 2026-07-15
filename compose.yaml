@@ -1,0 +1,17 @@
+services:
+  miteinander:
+    image: "${GHCR_IMAGE:?GHCR_IMAGE muss in .env gesetzt sein}:latest"
+    pull_policy: always
+    container_name: miteinander-eglh
+    restart: unless-stopped
+    ports:
+      - "3080:3000"
+    environment:
+      APP_PASSWORD: "${APP_PASSWORD:?APP_PASSWORD muss in .env gesetzt sein}"
+      SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET muss in .env gesetzt sein}"
+      TZ: "Europe/Berlin"
+    volumes:
+      - miteinander_data:/app/data
+
+volumes:
+  miteinander_data:

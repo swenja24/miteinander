@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f5ef">
+  <title>Miteinander – Eingliederungshilfe organisieren</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login-shell">
+    <main class="login-card">
+      <div class="brand-mark" aria-hidden="true">M</div>
+      <p class="eyebrow">Sicherer Familienbereich</p>
+      <h1>Willkommen bei<br><em>Miteinander</em></h1>
+      <p class="lede">Anträge, Fristen, Unterlagen und Ausgaben an einem ruhigen Ort.</p>
+      <form id="login-form">
+        <label for="password">Familien-Passwort</label>
+        <div class="password-row"><input id="password" type="password" autocomplete="current-password" required><button type="button" class="icon-btn" id="show-password" aria-label="Passwort anzeigen">◉</button></div>
+        <p id="login-error" class="error" role="alert"></p>
+        <button class="primary wide" type="submit">Sicher anmelden <span>→</span></button>
+      </form>
+      <p class="privacy-note">Ihre Daten bleiben auf Ihrem eigenen Server.</p>
+    </main>
+  </div>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <a href="#dashboard" class="logo" aria-label="Miteinander Startseite"><span>M</span><strong>Miteinander</strong></a>
+      <nav aria-label="Hauptnavigation">
+        <a href="#dashboard" data-page="dashboard"><span>⌂</span> Überblick</a>
+        <a href="#cases" data-page="cases"><span>◇</span> Vorgänge</a>
+        <a href="#tasks" data-page="tasks"><span>✓</span> Aufgaben</a>
+        <a href="#documents" data-page="documents"><span>▤</span> Dokumente</a>
+        <a href="#ledger" data-page="ledger"><span>€</span> Kassenbuch</a>
+        <a href="#family" data-page="family"><span>♧</span> Familie</a>
+      </nav>
+      <div class="sidebar-foot"><button id="logout" class="text-btn">Abmelden</button><small>Selbst gehostet · Version 0.1</small></div>
+    </aside>
+
+    <header class="mobile-head"><a href="#dashboard" class="logo"><span>M</span><strong>Miteinander</strong></a><button id="menu" class="icon-btn" aria-label="Menü öffnen">☰</button></header>
+    <main id="content" tabindex="-1"></main>
+  </div>
+
+  <dialog id="modal"><div class="modal-card"><button class="modal-close" type="button" aria-label="Schließen">×</button><div id="modal-content"></div></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
