@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-4', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-4") as response:
+            self.assertIn('/app.js?v=20260715-5', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-5") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -99,6 +99,20 @@ class ServerTest(unittest.TestCase):
         self.call("/api/tasks/" + first["id"], "DELETE", cookie=admin_cookie)
         _, final_data = self.call("/api/data", cookie=admin_cookie)
         self.assertNotIn(first["id"], [task["id"] for task in final_data["tasks"]])
+
+    def test_open_ended_series_always_has_seven_current_occurrences(self):
+        admin_cookie = self.login()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        _, first = self.call("/api/tasks", "POST", {
+            "title": "Wöchentliche Planung", "due": yesterday,
+            "status": "planned", "recurrence": "weekly", "recurrenceUntil": "",
+        }, admin_cookie)
+        _, visible = self.call("/api/data", cookie=admin_cookie)
+        series = [task for task in visible["tasks"] if task.get("recurrenceSeriesId") == first["recurrenceSeriesId"]]
+        current = [task for task in series if task["due"] >= date.today().isoformat()]
+        past = [task for task in series if task["due"] < date.today().isoformat()]
+        self.assertEqual(len(current), 7)
+        self.assertEqual(len(past), 1)
 
     def test_accounts_and_protected_receipt_upload(self):
         cookie = self.login()

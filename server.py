@@ -163,21 +163,50 @@ def recurring_dates(start_value: str, recurrence: str, until_value: str | None) 
     result = []
     while len(result) < 100 and (until is None or current <= until):
         result.append(current.isoformat())
-        if until is None and len(result) >= 6:
+        if until is None and len(result) >= 7:
             break
-        if recurrence in {"weekly", "biweekly"}:
-            current += timedelta(days=7 if recurrence == "weekly" else 14)
-        elif recurrence == "monthly":
-            month = current.month + 1
-            year = current.year + (month - 1) // 12
-            month = (month - 1) % 12 + 1
-            current = date(year, month, min(current.day, calendar.monthrange(year, month)[1]))
-        elif recurrence == "yearly":
-            year = current.year + 1
-            current = date(year, current.month, min(current.day, calendar.monthrange(year, current.month)[1]))
-        else:
-            break
+        current = next_recurring_date(current, recurrence)
     return result
+
+
+def next_recurring_date(current: date, recurrence: str) -> date:
+    if recurrence in {"weekly", "biweekly"}:
+        return current + timedelta(days=7 if recurrence == "weekly" else 14)
+    if recurrence == "monthly":
+        month = current.month + 1
+        year = current.year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        return date(year, month, min(current.day, calendar.monthrange(year, month)[1]))
+    if recurrence == "yearly":
+        year = current.year + 1
+        return date(year, current.month, min(current.day, calendar.monthrange(year, current.month)[1]))
+    raise ValueError("Unbekannte Wiederholung")
+
+
+def ensure_rolling_tasks(value: dict) -> bool:
+    """Keep seven non-past occurrences for every open-ended recurring series."""
+    today_value = date.today().isoformat()
+    series_ids = {task.get("recurrenceSeriesId") for task in value.get("tasks", []) if task.get("recurrenceSeriesId") and not task.get("recurrenceUntil")}
+    changed = False
+    for series_id in series_ids:
+        series = [task for task in value["tasks"] if task.get("recurrenceSeriesId") == series_id]
+        active = [task for task in series if not task.get("deletedAt") and task.get("due", "") >= today_value]
+        if not series or len(active) >= 7:
+            continue
+        template = max(series, key=lambda task: task.get("due", ""))
+        current = date.fromisoformat(template["due"])
+        existing_dates = {task.get("due") for task in series}
+        while len(active) < 7:
+            current = next_recurring_date(current, template.get("recurrence", "once"))
+            if current.isoformat() in existing_dates:
+                continue
+            occurrence = {key: clean(item) for key, item in template.items() if key not in {"id", "due", "history", "deletedAt", "deletedByUserId", "deletedByName", "updatedAt", "updatedByUserId"}}
+            occurrence.update({"id": str(uuid.uuid4()), "due": current.isoformat(), "status": template.get("status") if template.get("status") in {"open", "planned"} else "planned", "history": [], "createdAt": now(), "generatedAt": now()})
+            value["tasks"].append(occurrence)
+            active.append(occurrence)
+            existing_dates.add(occurrence["due"])
+            changed = True
+    return changed
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -245,6 +274,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not user:
             return self.send_json(401, {"error": "Bitte anmelden."})
         if path == "/api/data" and method == "GET":
+            with lock:
+                if ensure_rolling_tasks(data):
+                    save_data(data)
             visible = {
                 "family": data["family"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
