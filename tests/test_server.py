@@ -49,8 +49,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-2', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-2") as response:
+            self.assertIn('/app.js?v=20260715-3', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-3") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -89,6 +89,23 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen("http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"])
         self.assertEqual(error.exception.code, 401)
+
+    def test_ledger_suggestions_and_no_receipt(self):
+        cookie = self.login()
+        _, options = self.call("/api/ledger-options", "PUT", {
+            "descriptions": ["Lebensmittel", "Fahrtkosten"],
+            "categories": ["Haushalt", "Mobilität"],
+        }, cookie)
+        self.assertEqual(options["categories"], ["Haushalt", "Mobilität"])
+        _, entry = self.call("/api/ledger", "POST", {
+            "description": "Medikamente", "category": "Gesundheit",
+            "amount": "12.34", "receiptStatus": "none",
+        }, cookie)
+        self.assertEqual(entry["amount"], "12.34")
+        self.assertEqual(entry["receiptStatus"], "none")
+        _, visible = self.call("/api/data", cookie=cookie)
+        self.assertIn("Medikamente", visible["ledgerOptions"]["descriptions"])
+        self.assertIn("Gesundheit", visible["ledgerOptions"]["categories"])
 
     def test_individual_permissions_are_enforced(self):
         admin_cookie = self.login()

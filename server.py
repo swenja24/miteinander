@@ -38,6 +38,7 @@ def empty_data() -> dict:
     return {
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
+        "ledgerOptions": {"descriptions": [], "categories": []},
         "accounts": [
             {"id": cash_id, "name": "Lineas Barkasse", "type": "Bargeld", "color": "#285c4d"},
             {"id": savings_id, "name": "Lineas Bargeld-Spardose", "type": "Bargeld", "color": "#5b57c8"},
@@ -90,6 +91,12 @@ def load_data() -> dict:
         loaded["accounts"] = defaults
         for entry in loaded.get("ledger", []):
             entry.setdefault("accountId", defaults[0]["id"])
+        changed = True
+    if "ledgerOptions" not in loaded:
+        loaded["ledgerOptions"] = {
+            "descriptions": sorted({str(entry.get("description", "")).strip() for entry in loaded.get("ledger", []) if entry.get("description")}),
+            "categories": sorted({str(entry.get("category", "")).strip() for entry in loaded.get("ledger", []) if entry.get("category")}),
+        }
         changed = True
     if not loaded.get("users"):
         person = loaded.get("family", {}).get("person") or "Linea"
@@ -214,6 +221,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "messages": [],
                 "ledger": data["ledger"] if self.allowed(user, "ledger") else [],
                 "accounts": data["accounts"] if self.allowed(user, "ledger") else [],
+                "ledgerOptions": data.get("ledgerOptions", {"descriptions": [], "categories": []}) if self.allowed(user, "ledger") else {"descriptions": [], "categories": []},
                 "members": data["members"] if self.allowed(user, "tasks") or self.allowed(user, "family") else [],
                 "currentUser": self.public_user(user),
                 "users": [self.public_user(u) for u in data["users"]] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"]} for u in data["users"]],
@@ -246,6 +254,18 @@ class Handler(SimpleHTTPRequestHandler):
                 data["family"]["updatedAt"] = now()
                 save_data(data)
             return self.send_json(200, data["family"])
+
+        if path == "/api/ledger-options" and method == "PUT":
+            if not self.allowed(user, "ledger"):
+                return self.send_json(403, {"error": "Keine Berechtigung für das Kassenbuch."})
+            payload = self.read_json()
+            with lock:
+                for key in ("descriptions", "categories"):
+                    values = payload.get(key)
+                    if isinstance(values, list):
+                        data.setdefault("ledgerOptions", {})[key] = list(dict.fromkeys(clean(str(value)) for value in values if str(value).strip()))[:200]
+                save_data(data)
+            return self.send_json(200, data["ledgerOptions"])
 
         user_parts = path.strip("/").split("/")
         if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "users"]:
@@ -310,6 +330,12 @@ class Handler(SimpleHTTPRequestHandler):
                 item["createdByName"] = user["displayName"]
                 if receipt_image:
                     item["receiptFile"] = save_receipt(receipt_image)
+                    item["receiptStatus"] = "available"
+                if collection == "ledger":
+                    for field, key in (("description", "descriptions"), ("category", "categories")):
+                        value = item.get(field)
+                        choices = data.setdefault("ledgerOptions", {}).setdefault(key, [])
+                        if value and value not in choices: choices.append(value)
                 data[collection].insert(0, item)
                 save_data(data)
                 return self.send_json(201, item)
@@ -323,6 +349,17 @@ class Handler(SimpleHTTPRequestHandler):
                 data[collection][index]["updatedByUserId"] = user["id"]
                 if receipt_image:
                     data[collection][index]["receiptFile"] = save_receipt(receipt_image)
+                    data[collection][index]["receiptStatus"] = "available"
+                elif collection == "ledger" and data[collection][index].get("receiptStatus") == "none":
+                    old_receipt = data[collection][index].pop("receiptFile", None)
+                    data[collection][index].pop("receipt", None)
+                    if old_receipt:
+                        (RECEIPTS_DIR / Path(old_receipt).name).unlink(missing_ok=True)
+                if collection == "ledger":
+                    for field, key in (("description", "descriptions"), ("category", "categories")):
+                        value = data[collection][index].get(field)
+                        choices = data.setdefault("ledgerOptions", {}).setdefault(key, [])
+                        if value and value not in choices: choices.append(value)
                 data[collection][index]["updatedAt"] = now()
                 save_data(data)
                 return self.send_json(200, data[collection][index])

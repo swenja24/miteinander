@@ -5,7 +5,7 @@ const formatDate = value => value ? new Intl.DateTimeFormat('de-DE', {day:'2-dig
 const money = value => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'}).format(Number(value)||0);
 const today = () => new Date().toISOString().slice(0,10);
 let state = null;
-let ledgerAccount = 'all';
+let ledgerAccounts = new Set();
 
 async function request(path, options = {}) {
   const response = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options});
@@ -55,15 +55,16 @@ function tasksPage(){const sorted=[...state.tasks].sort((a,b)=>(a.status==='done
 function documentsPage(){return `${header('Zentrale Ablage','Dokumente','Wichtige Unterlagen auffindbar erfassen.',`<button class="primary" data-add="document">+ Neues Dokument</button>`)}<p class="card" style="margin-bottom:20px">ⓘ Im MVP werden Dokument-Metadaten und der Ablageort erfasst. Ein sicherer Datei-Upload folgt in der nächsten Ausbaustufe.</p><div class="card data-card">${state.documents.map(d=>`<article class="data-row"><div><h3>${esc(d.title)}</h3><p>${esc(d.notes||'Keine Notiz')}</p></div><div><strong>${esc(d.category||'Sonstiges')}</strong><p>${esc(d.location||'Ablageort nicht angegeben')}</p></div><div><strong>${formatDate(d.date)}</strong><p>${esc(state.cases.find(c=>c.id===d.caseId)?.title||'Kein Antrag')}</p></div><div class="row-actions"><button class="icon-btn" data-edit="document" data-id="${d.id}">✎</button><button class="icon-btn danger" data-delete="documents" data-id="${d.id}">×</button></div></article>`).join('')||empty('Noch keine Dokumente erfasst.')}</div>`;}
 
 function ledgerPage(){
-  const entries=ledgerAccount==='all'?state.ledger:state.ledger.filter(x=>x.accountId===ledgerAccount);
+  const selected=ledgerAccounts.has('__none__')?new Set():ledgerAccounts.size?ledgerAccounts:new Set(state.accounts.map(a=>a.id));
+  const entries=state.ledger.filter(x=>selected.has(x.accountId));
   const sum=items=>items.reduce((s,x)=>s+(x.type==='income'?1:-1)*Number(x.amount||0),0);
   const balance=sum(entries);
   const accountCards=(state.accounts||[]).map(a=>`<div class="card mini-stat"><span class="bubble" style="background:${esc(a.color)}22;color:${esc(a.color)}">€</span><div><strong>${money(sum(state.ledger.filter(x=>x.accountId===a.id)))}</strong><small>${esc(a.name)}</small></div></div>`).join('');
   return `${header('Nachweise & Abrechnung','Kassenbuch','Einnahmen, Ausgaben und Belege nachvollziehbar dokumentieren.',`<button class="primary" data-add="ledger">+ Neue Buchung</button>`)}
   <section class="account-balances">${accountCards}</section>
-  <div class="balance"><div><span>${ledgerAccount==='all'?'Gesamtstand aller Konten':esc(accountName(ledgerAccount))}</span><br><strong>${money(balance)}</strong></div><div class="balance-actions"><button class="secondary" data-export="csv">CSV / Excel</button> <button class="secondary" data-export="print">PDF drucken</button></div></div>
-  <div class="toolbar"><label class="filter-label">Konto filtern<select id="account-filter"><option value="all">Alle Konten</option>${state.accounts.map(a=>`<option value="${a.id}" ${ledgerAccount===a.id?'selected':''}>${esc(a.name)}</option>`)}</select></label></div>
-  <div class="card data-card">${entries.map(x=>`<article class="data-row"><div><h3>${esc(x.description)}</h3><p>${esc(x.category||'Sonstiges')}${x.receipt?' · Beleg '+esc(x.receipt):''}</p></div><div><strong>${formatDate(x.date)}</strong><p>${esc(accountName(x.accountId))} · ${esc(x.payee||'Kein Empfänger')}</p><p>Eingetragen von ${esc(userName(x.createdByUserId,x.createdByName))}</p></div><div class="amount ${x.type==='income'?'income':'expense'}">${x.type==='income'?'+':'−'} ${money(x.amount)}${x.receiptFile?`<a class="receipt-link" href="/api/receipts/${encodeURIComponent(x.receiptFile)}" target="_blank">Beleg ansehen</a>`:''}</div><div class="row-actions"><button class="icon-btn" data-edit="ledger" data-id="${x.id}">✎</button><button class="icon-btn danger" data-delete="ledger" data-id="${x.id}">×</button></div></article>`).join('')||empty('Für diese Auswahl gibt es noch keine Buchungen.')}</div>`;
+  <div class="balance"><div><span>${selected.size===state.accounts.length?'Gesamtstand aller Konten':`Stand der ausgewählten Konten (${selected.size})`}</span><br><strong>${money(balance)}</strong></div><div class="balance-actions"><button class="secondary" data-export="csv">CSV / Excel</button> <button class="secondary" data-export="print">PDF drucken</button></div></div>
+  <fieldset class="card account-filter"><legend>Kassenstände anzeigen</legend><label><input type="checkbox" data-account-all ${selected.size===state.accounts.length?'checked':''}> Alle Konten</label>${state.accounts.map(a=>`<label><input type="checkbox" data-account="${a.id}" ${selected.has(a.id)?'checked':''}> ${esc(a.name)}</label>`).join('')}</fieldset>
+  <div class="card data-card ledger-list">${entries.map(x=>`<article class="data-row"><div><h3>${esc(x.description)}</h3><p>${esc(x.category||'Sonstiges')} · ${x.receiptStatus==='none'&&!x.receiptFile?'Kein Beleg':x.receipt?'Beleg '+esc(x.receipt):x.receiptFile?'Beleg vorhanden':'Kein Beleg angegeben'}</p></div><div><strong>${formatDate(x.date)}</strong><p>${esc(accountName(x.accountId))} · ${esc(x.payee||'Kein Empfänger')}</p><p>Eingetragen von ${esc(userName(x.createdByUserId,x.createdByName))}</p></div><div class="amount ${x.type==='income'?'income':'expense'}">${x.type==='income'?'+':'−'} ${money(x.amount)}${x.receiptFile?`<a class="receipt-link" href="/api/receipts/${encodeURIComponent(x.receiptFile)}" target="_blank">Beleg ansehen</a>`:''}</div>${x.receiptFile?`<figure class="receipt-print"><img src="/api/receipts/${encodeURIComponent(x.receiptFile)}" alt="Beleg zu ${esc(x.description)}"><figcaption>Beleg zu ${esc(x.description)}</figcaption></figure>`:''}<div class="row-actions"><button class="icon-btn" data-edit="ledger" data-id="${x.id}">✎</button><button class="icon-btn danger" data-delete="ledger" data-id="${x.id}">×</button></div></article>`).join('')||empty('Für diese Auswahl gibt es noch keine Buchungen.')}</div>`;
 }
 function accessSection(){
   if(!state.capabilities.manageAccess) return '';
@@ -76,7 +77,7 @@ const configs={
   case:{collection:'cases',title:'Antrag',newTitle:'Neuer Antrag',fields:[['title','Titel','text'],['authority','Behörde / Kontakt','text'],['status','Status','select','draft:Entwurf|collecting:Unterlagen sammeln|submitted:Eingereicht|question:Rückfrage|approved:Bewilligt|done:Erledigt'],['due','Nächste Frist','date'],['description','Notiz','textarea']]},
   task:{collection:'tasks',title:'Aufgabe',newTitle:'Neue Aufgabe',fields:[['title','Aufgabe','text'],['assignee','Verantwortlich','members'],['due','Fällig am','date'],['status','Status','select','open:Offen|done:Erledigt'],['notes','Notiz','textarea']]},
   document:{collection:'documents',title:'Dokument',newTitle:'Neues Dokument',fields:[['title','Dokumentname','text'],['category','Kategorie','select','Antrag:Antrag|Bescheid:Bescheid|Schriftverkehr:Schriftverkehr|Nachweis:Nachweis|Sonstiges:Sonstiges'],['date','Datum','date'],['caseId','Zugehöriger Antrag','cases'],['location','Ablageort / Aktenzeichen','text'],['notes','Notiz','textarea']]},
-  ledger:{collection:'ledger',title:'Buchung',newTitle:'Neue Buchung',fields:[['description','Beschreibung','text'],['accountId','Konto','accounts'],['type','Art','select','expense:Ausgabe|income:Einnahme'],['amount','Betrag in Euro','number'],['date','Datum','date'],['category','Kategorie','text'],['payee','Empfänger / Quelle','text'],['receipt','Belegnummer','text'],['receiptImage','Rechnung fotografieren oder hochladen','image'],['notes','Notiz','textarea']]},
+  ledger:{collection:'ledger',title:'Buchung',newTitle:'Neue Buchung',fields:[['description','Beschreibung','suggestions','descriptions'],['accountId','Konto','accounts'],['type','Art','select','expense:Ausgabe|income:Einnahme'],['amount','Betrag in Euro','money'],['date','Datum','date'],['category','Kategorie','suggestions','categories'],['payee','Empfänger / Quelle','text'],['receiptStatus','Beleg','select','available:Beleg vorhanden|none:Kein Beleg vorhanden'],['receipt','Belegnummer (optional)','text'],['receiptImage','Rechnung fotografieren oder hochladen','image'],['notes','Notiz','textarea']]},
   member:{collection:'members',title:'Person',newTitle:'Neue Person',fields:[['name','Name','text'],['role','Rolle','select','Leistungsberechtigte Person:Leistungsberechtigte Person|Angehörige:Angehörige|Gesetzliche Betreuung:Gesetzliche Betreuung|Assistenz:Assistenz'],['color','Farbe','color']]}
 };
 function options(spec,value){return spec.split('|').map(x=>{const[v,l]=x.split(':');return `<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`}).join('');}
@@ -101,6 +102,7 @@ function receiptDataUrl(file){
 }
 function openForm(type,id){
   const c=configs[type],item=id?state[c.collection].find(x=>x.id===id):{};
+  if(type==='ledger'&&!item.receiptStatus) item.receiptStatus=item.receiptFile||item.receipt?'available':'none';
   const fields=c.fields.map(([name,label,kind,spec])=>{
     let input;
     if(kind==='textarea') input=`<textarea name="${name}">${esc(item[name]||'')}</textarea>`;
@@ -109,11 +111,23 @@ function openForm(type,id){
     else if(kind==='accounts') input=`<select name="${name}" required>${state.accounts.map(a=>`<option value="${a.id}" ${a.id===(item[name]||state.accounts[0]?.id)?'selected':''}>${esc(a.name)}</option>`)}</select>`;
     else if(kind==='cases') input=`<select name="${name}"><option value="">Kein Antrag</option>${state.cases.map(x=>`<option value="${x.id}" ${x.id===item[name]?'selected':''}>${esc(x.title)}</option>`)}</select>`;
     else if(kind==='image') input=`<input name="${name}" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small class="field-help">Du kannst die Kamera öffnen oder ein vorhandenes Foto auswählen.${item.receiptFile?' Ein Beleg ist bereits hinterlegt.':''}</small>`;
+    else if(kind==='suggestions') input=`<input name="${name}" list="ledger-${spec}" value="${esc(item[name]||'')}" ${name==='description'?'required':''}><datalist id="ledger-${spec}">${(state.ledgerOptions?.[spec]||[]).map(value=>`<option value="${esc(value)}">`).join('')}</datalist><button type="button" class="suggestion-edit" data-manage-suggestions="${spec}">Vorschläge bearbeiten</button>`;
+    else if(kind==='money') input=`<input name="${name}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(item[name]??'')}" required>`;
     else input=`<input name="${name}" type="${kind}" value="${esc(item[name]??(kind==='date'?today():kind==='color'?'#285c4d':''))}" ${name==='title'||name==='description'&&type==='ledger'?'required':''}>`;
     return `<div class="${['textarea','image'].includes(kind)?'full':''}"><label>${label}</label>${input}</div>`;
   }).join('');
   $('#modal-content').innerHTML=`<h2>${id?c.title+' bearbeiten':c.newTitle}</h2><form id="entry-form" class="form-grid">${fields}<div class="full form-actions"><button type="button" class="secondary" data-close>Abbrechen</button><button class="primary">Speichern</button></div></form>`;
   $('#modal').showModal();$('[data-close]').onclick=()=>$('#modal').close();
+  $$('[data-manage-suggestions]',$('#entry-form')).forEach(button=>button.onclick=async()=>{
+    const key=button.dataset.manageSuggestions,current=state.ledgerOptions?.[key]||[];
+    const edited=prompt('Bearbeite die Vorschläge. Trenne mehrere Einträge mit einem Semikolon.',current.join('; '));
+    if(edited===null)return;
+    const values=[...new Set(edited.split(';').map(value=>value.trim()).filter(Boolean))];
+    state.ledgerOptions=await request('/api/ledger-options',{method:'PUT',body:JSON.stringify({[key]:values})});
+    const list=$(`#ledger-${key}`);list.innerHTML=values.map(value=>`<option value="${esc(value)}">`).join('');toast('Vorschläge aktualisiert.');
+  });
+  const updateReceiptFields=()=>{const none=$('[name="receiptStatus"]',$('#entry-form'))?.value==='none';['receipt','receiptImage'].forEach(name=>$(`[name="${name}"]`,$('#entry-form'))?.closest('div')?.classList.toggle('hidden',none));};
+  $('[name="receiptStatus"]',$('#entry-form'))?.addEventListener('change',updateReceiptFields);updateReceiptFields();
   $('#entry-form').onsubmit=async e=>{
     e.preventDefault();
     const formData=new FormData(e.target),file=formData.get('receiptImage');
@@ -145,12 +159,14 @@ function openUserForm(id){
   };
 }
 
-function exportCsv(){const rows=[['Datum','Konto','Art','Beschreibung','Kategorie','Empfänger/Quelle','Eingetragen von','Beleg','Belegbild','Betrag EUR'],...state.ledger.map(x=>[x.date,accountName(x.accountId),x.type==='income'?'Einnahme':'Ausgabe',x.description,x.category,x.payee,userName(x.createdByUserId,x.createdByName),x.receipt,x.receiptFile?'Vorhanden':'',(x.type==='income'?1:-1)*Number(x.amount||0)])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`kassenbuch-${today()}.csv`;a.click();URL.revokeObjectURL(a.href);}
+function visibleLedger(){const selected=ledgerAccounts.has('__none__')?new Set():ledgerAccounts.size?ledgerAccounts:new Set(state.accounts.map(a=>a.id));return state.ledger.filter(x=>selected.has(x.accountId));}
+function exportCsv(){const rows=[['Datum','Konto','Art','Beschreibung','Kategorie','Empfänger/Quelle','Eingetragen von','Beleg','Belegbild','Betrag EUR'],...visibleLedger().map(x=>[x.date,accountName(x.accountId),x.type==='income'?'Einnahme':'Ausgabe',x.description,x.category,x.payee,userName(x.createdByUserId,x.createdByName),x.receiptStatus==='none'?'Kein Beleg':x.receipt,x.receiptFile?'Vorhanden':'',(x.type==='income'?1:-1)*Number(x.amount||0)])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`kassenbuch-${today()}.csv`;a.click();URL.revokeObjectURL(a.href);}
 function bind(){
   $$('[data-add]').forEach(b=>b.onclick=()=>openForm(b.dataset.add));$$('[data-edit]').forEach(b=>b.onclick=()=>openForm(b.dataset.edit,b.dataset.id));
   $$('[data-delete]').forEach(b=>b.onclick=async()=>{if(confirm('Diesen Eintrag wirklich löschen?')){await request(`/api/${b.dataset.delete}/${b.dataset.id}`,{method:'DELETE'});await refresh();toast('Gelöscht.');}});
   $('[data-export="csv"]')?.addEventListener('click',exportCsv);$('[data-export="print"]')?.addEventListener('click',()=>window.print());
-  $('#account-filter')?.addEventListener('change',e=>{ledgerAccount=e.target.value;render();});
+  $('[data-account-all]')?.addEventListener('change',e=>{ledgerAccounts=e.target.checked?new Set():new Set(['__none__']);render();});
+  $$('[data-account]').forEach(input=>input.addEventListener('change',e=>{if(!ledgerAccounts.size)ledgerAccounts=new Set(state.accounts.map(a=>a.id));ledgerAccounts.delete('__none__');e.target.checked?ledgerAccounts.add(e.target.dataset.account):ledgerAccounts.delete(e.target.dataset.account);if(ledgerAccounts.size===state.accounts.length)ledgerAccounts=new Set();render();}));
   $('#family-form')?.addEventListener('submit',async e=>{e.preventDefault();await request('/api/family',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});await refresh();toast('Familienbereich gespeichert.');});
   $('[data-user-add]')?.addEventListener('click',()=>openUserForm());
   $$('[data-user-edit]').forEach(button=>button.onclick=()=>openUserForm(button.dataset.userEdit));
