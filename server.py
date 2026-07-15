@@ -42,6 +42,8 @@ def empty_data() -> dict:
     return {
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
+        "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
+        "goals": [], "rules": [], "aboutComments": [],
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
         "accounts": [
@@ -87,6 +89,13 @@ def load_data() -> dict:
     except (FileNotFoundError, json.JSONDecodeError):
         loaded = empty_data()
     changed = False
+    for key, default in {
+        "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
+        "goals": [], "rules": [], "aboutComments": [],
+    }.items():
+        if key not in loaded:
+            loaded[key] = default
+            changed = True
     if "correspondence" not in loaded:
         loaded["correspondence"] = []
         changed = True
@@ -337,6 +346,10 @@ class Handler(SimpleHTTPRequestHandler):
                     save_data(data)
             visible = {
                 "family": data["family"],
+                "personProfile": data["personProfile"],
+                "goals": data["goals"],
+                "rules": data["rules"],
+                "aboutComments": data["aboutComments"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
                 "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
@@ -416,6 +429,63 @@ class Handler(SimpleHTTPRequestHandler):
                 data["family"]["updatedAt"] = now()
                 save_data(data)
             return self.send_json(200, data["family"])
+
+        if path == "/api/person-profile" and method == "PUT":
+            if not user.get("isAdmin"):
+                return self.send_json(403, {"error": "Das Personenprofil darf nur von Administratoren geändert werden."})
+            with lock:
+                data["personProfile"].update(clean(self.read_json()))
+                data["personProfile"]["updatedAt"] = now()
+                data["personProfile"]["updatedByName"] = user["displayName"]
+                save_data(data)
+            return self.send_json(200, data["personProfile"])
+
+        about_parts = path.strip("/").split("/")
+        if len(about_parts) in (3, 4) and about_parts[:2] == ["api", "about"] and about_parts[2] in {"goals", "rules", "comments"}:
+            kind = about_parts[2]
+            collection = {"goals": "goals", "rules": "rules", "comments": "aboutComments"}[kind]
+            item_id = about_parts[3] if len(about_parts) == 4 else None
+            if method == "POST" and not item_id:
+                if kind == "goals" and not user.get("isAdmin"):
+                    return self.send_json(403, {"error": "Ziele dürfen nur von Administratoren angelegt werden."})
+                payload = clean(self.read_json())
+                if kind == "comments":
+                    target_collection = "goals" if payload.get("targetType") == "goal" else "rules" if payload.get("targetType") == "rule" else None
+                    if not target_collection or not any(item["id"] == payload.get("targetId") for item in data[target_collection]):
+                        return self.send_json(400, {"error": "Das Ziel oder die Regel wurde nicht gefunden."})
+                item = {"id": str(uuid.uuid4()), **payload, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                if kind == "rules":
+                    item["approvalStatus"] = "pending"
+                with lock:
+                    data[collection].insert(0, item)
+                    save_data(data)
+                return self.send_json(201, item)
+            item = next((entry for entry in data[collection] if entry["id"] == item_id), None)
+            if not item:
+                return self.send_json(404, {"error": "Eintrag nicht gefunden."})
+            if method == "PUT":
+                if kind in {"goals", "rules"} and not user.get("isAdmin"):
+                    return self.send_json(403, {"error": "Diese Änderung muss durch einen Administrator erfolgen."})
+                if kind == "comments" and not (user.get("isAdmin") or item.get("createdByUserId") == user["id"]):
+                    return self.send_json(403, {"error": "Du kannst nur eigene Kommentare ändern."})
+                item.update(clean(self.read_json()))
+                item["updatedAt"] = now(); item["updatedByName"] = user["displayName"]
+                if kind == "rules" and item.get("approvalStatus") in {"approved", "rejected"}:
+                    item["reviewedAt"] = now(); item["reviewedByName"] = user["displayName"]
+                with lock: save_data(data)
+                return self.send_json(200, item)
+            if method == "DELETE":
+                if kind in {"goals", "rules"} and not user.get("isAdmin"):
+                    return self.send_json(403, {"error": "Nur Administratoren dürfen diesen Eintrag löschen."})
+                if kind == "comments" and not (user.get("isAdmin") or item.get("createdByUserId") == user["id"]):
+                    return self.send_json(403, {"error": "Du kannst nur eigene Kommentare löschen."})
+                with lock:
+                    data[collection].remove(item)
+                    if kind in {"goals", "rules"}:
+                        target_type = "goal" if kind == "goals" else "rule"
+                        data["aboutComments"] = [comment for comment in data["aboutComments"] if not (comment.get("targetType") == target_type and comment.get("targetId") == item_id)]
+                    save_data(data)
+                return self.send_json(200, {"ok": True})
 
         if path == "/api/ledger-options" and method == "PUT":
             if not self.allowed(user, "ledger"):

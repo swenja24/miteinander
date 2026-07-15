@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-1', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-1") as response:
+            self.assertIn('/app.js?v=20260716-2', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -203,6 +203,37 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen("http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"])
         self.assertEqual(error.exception.code, 401)
+
+    def test_about_linea_profile_goals_rules_and_comments(self):
+        admin_cookie = self.login()
+        _, profile = self.call("/api/person-profile", "PUT", {
+            "introduction": "Ich bin Linea.", "strengths": "Kreativ und direkt",
+            "beiSummary": "Wichtige Inhalte aus dem BEI",
+        }, admin_cookie)
+        self.assertEqual(profile["introduction"], "Ich bin Linea.")
+        _, goal = self.call("/api/about/goals", "POST", {
+            "title": "Selbstständiger wohnen", "description": "Schrittweise mehr übernehmen", "status": "active",
+        }, admin_cookie)
+        self.call("/api/users", "POST", {
+            "username": "abouthelper", "displayName": "Assistenz About",
+            "password": "sicheres-passwort", "role": "Assistenz", "permissions": {},
+        }, admin_cookie)
+        helper_cookie = self.login("abouthelper", "sicheres-passwort")
+        _, visible = self.call("/api/data", cookie=helper_cookie)
+        self.assertEqual(visible["personProfile"]["beiSummary"], "Wichtige Inhalte aus dem BEI")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/person-profile", "PUT", {"introduction": "Nicht erlaubt"}, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
+        _, rule = self.call("/api/about/rules", "POST", {
+            "title": "Absprachen dokumentieren", "text": "Änderungen werden gemeinsam festgehalten.",
+        }, helper_cookie)
+        self.assertEqual(rule["approvalStatus"], "pending")
+        _, comment = self.call("/api/about/comments", "POST", {
+            "targetType": "goal", "targetId": goal["id"], "text": "Der erste Schritt ist geschafft.",
+        }, helper_cookie)
+        self.assertEqual(comment["createdByName"], "Assistenz About")
+        _, approved = self.call("/api/about/rules/" + rule["id"], "PUT", {"approvalStatus": "approved"}, admin_cookie)
+        self.assertEqual(approved["approvalStatus"], "approved")
 
     def test_only_administrators_can_rename_accounts(self):
         admin_cookie = self.login()
