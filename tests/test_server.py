@@ -7,6 +7,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 
 
 class ServerTest(unittest.TestCase):
@@ -49,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-3', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-3") as response:
+            self.assertIn('/app.js?v=20260715-4', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-4") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -62,6 +63,42 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(self.temp.name, "familie.json"), encoding="utf-8") as file:
             stored = json.loads(file.read())
         self.assertEqual(stored["tasks"][0]["title"], "Bescheid prüfen")
+
+    def test_recurring_tasks_history_past_guard_and_soft_delete(self):
+        admin_cookie = self.login()
+        _, helper = self.call("/api/users", "POST", {
+            "username": "taskhelper", "displayName": "Aufgabenhilfe",
+            "password": "sicheres-passwort", "role": "Assistenz",
+            "permissions": {"tasks": True},
+        }, admin_cookie)
+        helper_cookie = self.login("taskhelper", "sicheres-passwort")
+        start = date.today() + timedelta(days=1)
+        end = start + timedelta(days=15)
+        _, first = self.call("/api/tasks", "POST", {
+            "title": "Medikamente stellen", "category": "Gesundheit",
+            "due": start.isoformat(), "status": "planned", "recurrence": "weekly",
+            "recurrenceUntil": end.isoformat(),
+        }, helper_cookie)
+        _, helper_data = self.call("/api/data", cookie=helper_cookie)
+        series = [task for task in helper_data["tasks"] if task.get("recurrenceSeriesId") == first["recurrenceSeriesId"]]
+        self.assertEqual(len(series), 3)
+        moved = (start + timedelta(days=2)).isoformat()
+        _, updated = self.call("/api/tasks/" + first["id"], "PUT", {"due": moved}, helper_cookie)
+        self.assertEqual(updated["history"][-1]["from"], start.isoformat())
+        self.assertEqual(updated["history"][-1]["to"], moved)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/tasks", "POST", {"title": "Nachtragen", "due": (date.today()-timedelta(days=1)).isoformat()}, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
+        _, deletion = self.call("/api/tasks/" + first["id"], "DELETE", cookie=helper_cookie)
+        self.assertTrue(deletion["pendingAdminConfirmation"])
+        _, hidden = self.call("/api/data", cookie=helper_cookie)
+        self.assertNotIn(first["id"], [task["id"] for task in hidden["tasks"]])
+        _, admin_data = self.call("/api/data", cookie=admin_cookie)
+        deleted = next(task for task in admin_data["tasks"] if task["id"] == first["id"])
+        self.assertEqual(deleted["deletedByUserId"], helper["id"])
+        self.call("/api/tasks/" + first["id"], "DELETE", cookie=admin_cookie)
+        _, final_data = self.call("/api/data", cookie=admin_cookie)
+        self.assertNotIn(first["id"], [task["id"] for task in final_data["tasks"]])
 
     def test_accounts_and_protected_receipt_upload(self):
         cookie = self.login()

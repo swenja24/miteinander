@@ -10,6 +10,8 @@ import secrets
 import threading
 import time
 import uuid
+import calendar
+from datetime import date, timedelta
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +41,7 @@ def empty_data() -> dict:
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "ledgerOptions": {"descriptions": [], "categories": []},
+        "taskOptions": {"categories": []},
         "accounts": [
             {"id": cash_id, "name": "Lineas Barkasse", "type": "Bargeld", "color": "#285c4d"},
             {"id": savings_id, "name": "Lineas Bargeld-Spardose", "type": "Bargeld", "color": "#5b57c8"},
@@ -98,6 +101,9 @@ def load_data() -> dict:
             "categories": sorted({str(entry.get("category", "")).strip() for entry in loaded.get("ledger", []) if entry.get("category")}),
         }
         changed = True
+    if "taskOptions" not in loaded:
+        loaded["taskOptions"] = {"categories": sorted({str(task.get("category", "")).strip() for task in loaded.get("tasks", []) if task.get("category")})}
+        changed = True
     if not loaded.get("users"):
         person = loaded.get("family", {}).get("person") or "Linea"
         member = next((m for m in loaded.get("members", []) if m.get("role") == "Leistungsberechtigte Person"), None)
@@ -146,6 +152,32 @@ def clean(value):
     if isinstance(value, list):
         return [clean(v) for v in value[:1000]]
     return value
+
+
+def recurring_dates(start_value: str, recurrence: str, until_value: str | None) -> list[str]:
+    """Return the initial due date plus future occurrences, capped for safety."""
+    if recurrence == "once" or not start_value:
+        return [start_value] if start_value else []
+    current = date.fromisoformat(start_value)
+    until = date.fromisoformat(until_value) if until_value else None
+    result = []
+    while len(result) < 100 and (until is None or current <= until):
+        result.append(current.isoformat())
+        if until is None and len(result) >= 6:
+            break
+        if recurrence in {"weekly", "biweekly"}:
+            current += timedelta(days=7 if recurrence == "weekly" else 14)
+        elif recurrence == "monthly":
+            month = current.month + 1
+            year = current.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            current = date(year, month, min(current.day, calendar.monthrange(year, month)[1]))
+        elif recurrence == "yearly":
+            year = current.year + 1
+            current = date(year, current.month, min(current.day, calendar.monthrange(year, current.month)[1]))
+        else:
+            break
+    return result
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -216,7 +248,8 @@ class Handler(SimpleHTTPRequestHandler):
             visible = {
                 "family": data["family"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
-                "tasks": data["tasks"] if self.allowed(user, "tasks") else [],
+                "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
+                "taskOptions": data.get("taskOptions", {"categories": []}) if self.allowed(user, "tasks") else {"categories": []},
                 "documents": data["documents"] if self.allowed(user, "documents") else [],
                 "messages": [],
                 "ledger": data["ledger"] if self.allowed(user, "ledger") else [],
@@ -266,6 +299,18 @@ class Handler(SimpleHTTPRequestHandler):
                         data.setdefault("ledgerOptions", {})[key] = list(dict.fromkeys(clean(str(value)) for value in values if str(value).strip()))[:200]
                 save_data(data)
             return self.send_json(200, data["ledgerOptions"])
+
+        if path == "/api/task-options" and method == "PUT":
+            if not self.allowed(user, "tasks"):
+                return self.send_json(403, {"error": "Keine Berechtigung für Aufgaben."})
+            payload = self.read_json()
+            values = payload.get("categories")
+            if not isinstance(values, list):
+                return self.send_json(400, {"error": "Kategorien müssen als Liste übermittelt werden."})
+            with lock:
+                data["taskOptions"] = {"categories": list(dict.fromkeys(clean(str(value)) for value in values if str(value).strip()))[:200]}
+                save_data(data)
+            return self.send_json(200, data["taskOptions"])
 
         user_parts = path.strip("/").split("/")
         if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "users"]:
@@ -324,6 +369,28 @@ class Handler(SimpleHTTPRequestHandler):
         with lock:
             if method == "POST" and not item_id:
                 payload = self.read_json()
+                if collection == "tasks":
+                    due = str(payload.get("due") or "")
+                    if due and due < date.today().isoformat() and not user.get("isAdmin"):
+                        return self.send_json(403, {"error": "Vergangene Aufgaben dürfen nur von Administratoren ergänzt werden."})
+                    if payload.get("status") not in {None, "open", "planned", "done", "refused"}:
+                        return self.send_json(400, {"error": "Ungültiger Aufgabenstatus."})
+                    recurrence = str(payload.get("recurrence") or "once")
+                    try:
+                        dates = recurring_dates(due, recurrence, str(payload.get("recurrenceUntil") or "") or None)
+                    except ValueError:
+                        return self.send_json(400, {"error": "Das Datum der Wiederholung ist ungültig."})
+                    series_id = str(uuid.uuid4()) if recurrence != "once" else None
+                    created = []
+                    for occurrence_due in dates or [due]:
+                        occurrence = {"id": str(uuid.uuid4()), **clean(payload), "due": occurrence_due, "recurrenceSeriesId": series_id, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "history": []}
+                        created.append(occurrence)
+                    category = clean(str(payload.get("category") or ""))
+                    choices = data.setdefault("taskOptions", {}).setdefault("categories", [])
+                    if category and category not in choices: choices.append(category)
+                    data["tasks"][0:0] = created
+                    save_data(data)
+                    return self.send_json(201, created[0])
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
                 item = {"id": str(uuid.uuid4()), **clean(payload), "createdAt": now()}
                 item["createdByUserId"] = user["id"]
@@ -344,6 +411,19 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(404, {"error": "Eintrag nicht gefunden."})
             if method == "PUT":
                 payload = self.read_json()
+                if collection == "tasks":
+                    existing = data[collection][index]
+                    if existing.get("deletedAt"):
+                        return self.send_json(409, {"error": "Eine gelöschte Aufgabe kann nicht bearbeitet werden."})
+                    due = str(payload.get("due") or existing.get("due") or "")
+                    if due and due < date.today().isoformat() and not user.get("isAdmin") and due != existing.get("due"):
+                        return self.send_json(403, {"error": "Vergangene Aufgaben dürfen nur von Administratoren ergänzt werden."})
+                    old_due = existing.get("due") or ""
+                    if due != old_due:
+                        existing.setdefault("history", []).append({"type": "rescheduled", "from": old_due, "to": due, "at": now(), "byUserId": user["id"], "byName": user["displayName"]})
+                    category = clean(str(payload.get("category") or existing.get("category") or ""))
+                    choices = data.setdefault("taskOptions", {}).setdefault("categories", [])
+                    if category and category not in choices: choices.append(category)
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
                 data[collection][index].update(clean(payload))
                 data[collection][index]["updatedByUserId"] = user["id"]
@@ -364,6 +444,13 @@ class Handler(SimpleHTTPRequestHandler):
                 save_data(data)
                 return self.send_json(200, data[collection][index])
             if method == "DELETE":
+                if collection == "tasks" and not user.get("isAdmin"):
+                    task = data[collection][index]
+                    task["deletedAt"] = now()
+                    task["deletedByUserId"] = user["id"]
+                    task["deletedByName"] = user["displayName"]
+                    save_data(data)
+                    return self.send_json(200, {"ok": True, "pendingAdminConfirmation": True})
                 data[collection].pop(index)
                 save_data(data)
                 return self.send_json(200, {"ok": True})
