@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-5', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-5") as response:
+            self.assertIn('/app.js?v=20260715-6', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-6") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -140,6 +140,24 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen("http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"])
         self.assertEqual(error.exception.code, 401)
+
+    def test_only_administrators_can_rename_accounts(self):
+        admin_cookie = self.login()
+        _, initial = self.call("/api/data", cookie=admin_cookie)
+        account = initial["accounts"][0]
+        _, renamed = self.call("/api/accounts/" + account["id"], "PUT", {
+            "name": "Lineas Haushaltskasse", "type": account["type"], "color": account["color"],
+        }, admin_cookie)
+        self.assertEqual(renamed["name"], "Lineas Haushaltskasse")
+        self.call("/api/users", "POST", {
+            "username": "accounthelper", "displayName": "Kontohilfe",
+            "password": "sicheres-passwort", "role": "Assistenz",
+            "permissions": {"family": True, "ledger": True},
+        }, admin_cookie)
+        helper_cookie = self.login("accounthelper", "sicheres-passwort")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/accounts/" + account["id"], "PUT", {"name": "Nicht erlaubt"}, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
 
     def test_ledger_suggestions_and_no_receipt(self):
         cookie = self.login()

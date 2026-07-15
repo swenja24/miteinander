@@ -397,6 +397,8 @@ class Handler(SimpleHTTPRequestHandler):
         permission = {"cases":"cases", "tasks":"tasks", "documents":"documents", "ledger":"ledger", "accounts":"family", "members":"family", "messages":"tasks"}[collection]
         if not self.allowed(user, permission):
             return self.send_json(403, {"error": "Keine Berechtigung für diesen Bereich."})
+        if collection == "accounts" and method in {"POST", "PUT", "DELETE"} and not user.get("isAdmin"):
+            return self.send_json(403, {"error": "Konten dürfen nur von Administratoren geändert werden."})
         item_id = parts[2] if len(parts) == 3 else None
         with lock:
             if method == "POST" and not item_id:

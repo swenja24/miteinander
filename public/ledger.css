@@ -13,6 +13,7 @@
   display: block;
   line-height: 1.25;
 }
+.account-card .icon-btn { margin-left: auto; }
 
 .balance-actions {
   margin-left: auto;
