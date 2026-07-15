@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-5', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-5") as response:
+            self.assertIn('/app.js?v=20260716-6', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-6") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -194,6 +194,44 @@ class ServerTest(unittest.TestCase):
         self.call("/api/tasks/" + first["id"], "DELETE", cookie=admin_cookie)
         _, final_data = self.call("/api/data", cookie=admin_cookie)
         self.assertNotIn(first["id"], [task["id"] for task in final_data["tasks"]])
+
+    def test_routine_plans_use_admin_approved_versions(self):
+        admin_cookie = self.login()
+        self.call("/api/users", "POST", {
+            "username": "routinehelper", "displayName": "Ablaufhilfe",
+            "password": "sicheres-passwort", "role": "Assistenz", "permissions": {"tasks": True},
+        }, admin_cookie)
+        helper_cookie = self.login("routinehelper", "sicheres-passwort")
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\nroutine").decode()
+        _, version1 = self.call("/api/routine-plans", "POST", {
+            "title": "Typischer Montag", "planType": "day", "days": "Montag",
+            "schedule": "08:00 | Frühstück | Medikamente\n08:30 | Abfahrt zur WfB",
+            "planFile": "data:image/png;base64," + png, "planFileName": "montag.png",
+        }, helper_cookie)
+        self.assertEqual(version1["approvalStatus"], "pending")
+        request = urllib.request.Request("http://127.0.0.1:8765/api/routine-files/" + version1["attachmentFile"], headers={"Cookie": helper_cookie})
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.headers.get_content_type(), "image/png")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/routine-plans/" + version1["id"] + "/review", "PUT", {"approvalStatus": "approved"}, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
+        _, approved1 = self.call("/api/routine-plans/" + version1["id"] + "/review", "PUT", {"approvalStatus": "approved"}, admin_cookie)
+        self.assertEqual(approved1["approvalStatus"], "approved")
+        _, version2 = self.call("/api/routine-plans/" + version1["id"], "PUT", {
+            "title": "Typischer Montag", "planType": "day", "days": "Montag",
+            "schedule": "08:00 | Frühstück\n08:45 | Abfahrt zur WfB",
+        }, helper_cookie)
+        self.assertEqual(version2["version"], 2)
+        self.assertEqual(version2["approvalStatus"], "pending")
+        _, before_review = self.call("/api/data", cookie=helper_cookie)
+        old = next(plan for plan in before_review["routinePlans"] if plan["id"] == version1["id"])
+        self.assertEqual(old["approvalStatus"], "approved")
+        self.call("/api/routine-plans/" + version2["id"] + "/review", "PUT", {"approvalStatus": "approved"}, admin_cookie)
+        _, after_review = self.call("/api/data", cookie=helper_cookie)
+        old = next(plan for plan in after_review["routinePlans"] if plan["id"] == version1["id"])
+        new = next(plan for plan in after_review["routinePlans"] if plan["id"] == version2["id"])
+        self.assertEqual(old["approvalStatus"], "superseded")
+        self.assertEqual(new["approvalStatus"], "approved")
 
     def test_open_ended_series_always_has_seven_current_occurrences(self):
         admin_cookie = self.login()

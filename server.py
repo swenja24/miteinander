@@ -28,6 +28,7 @@ RECEIPTS_DIR = DATA_DIR / "receipts"
 CASE_FILES_DIR = DATA_DIR / "case-files"
 DOCUMENT_FILES_DIR = DATA_DIR / "document-files"
 ABOUT_FILES_DIR = DATA_DIR / "about-files"
+ROUTINE_FILES_DIR = DATA_DIR / "routine-files"
 COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -44,7 +45,7 @@ def empty_data() -> dict:
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
@@ -87,6 +88,7 @@ def load_data() -> dict:
     CASE_FILES_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
     ABOUT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    ROUTINE_FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         loaded = json.loads(DATA_FILE.read_text("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -94,7 +96,7 @@ def load_data() -> dict:
     changed = False
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
@@ -190,6 +192,10 @@ def save_document_file(data_url: str, original_name: str = "Dokument") -> dict:
 
 def save_about_file(data_url: str, original_name: str = "Datei") -> dict:
     return save_uploaded_file(data_url, original_name, ABOUT_FILES_DIR)
+
+
+def save_routine_file(data_url: str, original_name: str = "Ablaufplan") -> dict:
+    return save_uploaded_file(data_url, original_name, ROUTINE_FILES_DIR)
 
 
 def clean(value):
@@ -361,6 +367,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "importantContacts": data["importantContacts"],
                 "contactOptions": data["contactOptions"],
                 "beis": data["beis"],
+                "routinePlans": data["routinePlans"] if self.allowed(user, "tasks") else [],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
                 "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
@@ -449,6 +456,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+        if path.startswith("/api/routine-files/") and method == "GET":
+            if not self.allowed(user, "tasks"): return self.send_json(403, {"error": "Kein Zugriff auf Ablaufpläne."})
+            filename = path.rsplit("/", 1)[-1]
+            if not filename or filename != Path(filename).name: return self.send_json(404, {"error": "Datei nicht gefunden."})
+            attachment = ROUTINE_FILES_DIR / filename
+            if not attachment.is_file(): return self.send_json(404, {"error": "Datei nicht gefunden."})
+            content = attachment.read_bytes(); self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content))); self.send_header("Content-Disposition", f"inline; filename={filename}")
+            self.send_header("Cache-Control", "private, max-age=3600"); self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers(); self.wfile.write(content); return
         if path == "/api/family" and method == "PUT":
             if not self.allowed(user, "family"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
@@ -623,6 +641,50 @@ class Handler(SimpleHTTPRequestHandler):
                 data["taskOptions"] = {"categories": list(dict.fromkeys(clean(str(value)) for value in values if str(value).strip()))[:200]}
                 save_data(data)
             return self.send_json(200, data["taskOptions"])
+
+        routine_parts = path.strip("/").split("/")
+        if len(routine_parts) in (2, 3, 4) and routine_parts[:2] == ["api", "routine-plans"]:
+            if not self.allowed(user, "tasks"):
+                return self.send_json(403, {"error": "Keine Berechtigung für Ablaufpläne."})
+            plan_id = routine_parts[2] if len(routine_parts) >= 3 else None
+            action = routine_parts[3] if len(routine_parts) == 4 else None
+            plan = next((item for item in data["routinePlans"] if item["id"] == plan_id), None) if plan_id else None
+            if action == "review" and method == "PUT":
+                if not user.get("isAdmin"): return self.send_json(403, {"error": "Ablaufpläne dürfen nur von Administratoren freigegeben werden."})
+                if not plan: return self.send_json(404, {"error": "Ablaufplan nicht gefunden."})
+                decision = self.read_json().get("approvalStatus")
+                if decision not in {"approved", "rejected"}: return self.send_json(400, {"error": "Ungültige Entscheidung."})
+                with lock:
+                    if decision == "approved":
+                        for other in data["routinePlans"]:
+                            if other.get("seriesId") == plan.get("seriesId") and other.get("approvalStatus") == "approved": other["approvalStatus"] = "superseded"
+                    plan["approvalStatus"] = decision; plan["reviewedAt"] = now(); plan["reviewedByName"] = user["displayName"]
+                    save_data(data)
+                return self.send_json(200, plan)
+            if method == "POST" and not plan_id:
+                payload = self.read_json(); file_data = str(payload.pop("planFile", "")); file_name = str(payload.pop("planFileName", "Ablaufplan"))
+                plan = {"id": str(uuid.uuid4()), "seriesId": str(uuid.uuid4()), "version": 1, **clean(payload), "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                if file_data: plan.update(save_routine_file(file_data, file_name))
+                with lock: data["routinePlans"].insert(0, plan); save_data(data)
+                return self.send_json(201, plan)
+            if not plan: return self.send_json(404, {"error": "Ablaufplan nicht gefunden."})
+            if method == "PUT" and not action:
+                payload = self.read_json(); file_data = str(payload.pop("planFile", "")); file_name = str(payload.pop("planFileName", "Ablaufplan"))
+                version = max((item.get("version", 1) for item in data["routinePlans"] if item.get("seriesId") == plan.get("seriesId")), default=0) + 1
+                inherited = {key: plan.get(key) for key in ("attachmentFile", "attachmentName", "attachmentType") if plan.get(key)}
+                revision = {"id": str(uuid.uuid4()), "seriesId": plan["seriesId"], "version": version, **clean(payload), **inherited, "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "basedOnId": plan["id"]}
+                if file_data: revision.update(save_routine_file(file_data, file_name))
+                with lock: data["routinePlans"].insert(0, revision); save_data(data)
+                return self.send_json(201, revision)
+            if method == "DELETE":
+                if not (user.get("isAdmin") or plan.get("createdByUserId") == user["id"] and plan.get("approvalStatus") == "pending"):
+                    return self.send_json(403, {"error": "Du kannst nur eigene, noch nicht freigegebene Entwürfe löschen."})
+                with lock:
+                    data["routinePlans"].remove(plan)
+                    filename = plan.get("attachmentFile")
+                    if filename and not any(item.get("attachmentFile") == filename for item in data["routinePlans"]): (ROUTINE_FILES_DIR / Path(filename).name).unlink(missing_ok=True)
+                    save_data(data)
+                return self.send_json(200, {"ok": True})
 
         user_parts = path.strip("/").split("/")
         if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "users"]:

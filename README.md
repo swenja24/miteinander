@@ -14,6 +14,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Antragsakten mit Ergänzungsanträgen, neutraler Ereignis- und Fristentimeline, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
 - Gemeinsamer Bereich „Über Linea“ mit Profilfoto, mehreren BEI-PDFs, Personenprofil, Zielen, Kommentarverlauf und administrativ freigegebenen Regeln
 - Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
+- Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Responsive, tastaturbedienbare Oberfläche
 
@@ -58,7 +59,7 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 
 ## Backup und Wiederherstellung
 
-Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files`, hochgeladene Dokumente unter `/app/data/document-files` und Profilfoto sowie BEIs unter `/app/data/about-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
+Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files`, hochgeladene Dokumente unter `/app/data/document-files`, Profilfoto sowie BEIs unter `/app/data/about-files` und Anhänge von Ablaufplänen unter `/app/data/routine-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
 
 ```bash
 docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
