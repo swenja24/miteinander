@@ -45,6 +45,15 @@ class ServerTest(unittest.TestCase):
             self.call("/api/data")
         self.assertEqual(error.exception.code, 401)
 
+    def test_frontend_assets_cannot_be_served_from_an_old_cache(self):
+        with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
+            html = response.read().decode()
+            self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
+            self.assertIn('/app.js?v=20260715-2', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-2") as response:
+            self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
+            self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
+
     def test_create_and_persist_task(self):
         cookie = self.login()
         _, item = self.call("/api/tasks", "POST", {"title": "Bescheid prüfen", "status": "open"}, cookie)

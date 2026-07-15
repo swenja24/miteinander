@@ -342,6 +342,12 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mimetypes.guess_type(file)[0] or "application/octet-stream")
         self.send_header("Content-Length", str(len(content)))
+        # Static assets deliberately use stable, human-readable names. Revalidate
+        # them on every request so browsers and reverse proxies cannot retain a
+        # previous frontend after a container update.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
