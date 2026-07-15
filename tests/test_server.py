@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-4', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-4") as response:
+            self.assertIn('/app.js?v=20260716-5', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-5") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -251,8 +251,29 @@ class ServerTest(unittest.TestCase):
             "password": "sicheres-passwort", "role": "Assistenz", "permissions": {},
         }, admin_cookie)
         helper_cookie = self.login("abouthelper", "sicheres-passwort")
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\nprofile").decode()
+        _, with_photo = self.call("/api/profile-photo", "PUT", {
+            "photoData": "data:image/png;base64," + png, "photoName": "linea.png",
+        }, admin_cookie)
+        self.assertTrue(with_photo["photoFile"].endswith(".png"))
+        pdf = base64.b64encode(b"%PDF-1.4\nBEI").decode()
+        _, bei_wak = self.call("/api/about/beis", "POST", {
+            "title": "BEI Wohnen", "area": "Wohnen", "date": date.today().isoformat(),
+            "beiFile": "data:application/pdf;base64," + pdf, "beiFileName": "BEI-Wohnen.pdf",
+        }, admin_cookie)
+        _, bei_work = self.call("/api/about/beis", "POST", {
+            "title": "BEI Arbeit", "area": "Arbeit",
+            "beiFile": "data:application/pdf;base64," + pdf, "beiFileName": "BEI-Arbeit.pdf",
+        }, admin_cookie)
         _, visible = self.call("/api/data", cookie=helper_cookie)
         self.assertEqual(visible["personProfile"]["beiSummary"], "Wichtige Inhalte aus dem BEI")
+        self.assertEqual({bei["id"] for bei in visible["beis"]}, {bei_wak["id"], bei_work["id"]})
+        request = urllib.request.Request("http://127.0.0.1:8765/api/about-files/" + bei_wak["attachmentFile"], headers={"Cookie": helper_cookie})
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.headers.get_content_type(), "application/pdf")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/about/beis", "POST", {"title": "Nicht erlaubt"}, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/person-profile", "PUT", {"introduction": "Nicht erlaubt"}, helper_cookie)
         self.assertEqual(error.exception.code, 403)

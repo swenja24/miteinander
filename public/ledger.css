@@ -67,6 +67,12 @@
 .muted { color: var(--muted); }
 .profile-card { margin-bottom: 32px; }
 .profile-card > .card-head { align-items: flex-start; }
+.profile-head { align-items: center; display: flex; gap: 20px; margin-bottom: 22px; }
+.profile-head h1 { margin: 3px 0 0; }
+.profile-photo { flex: 0 0 112px; height: 112px; position: relative; }
+.profile-photo img, .profile-photo > span { border-radius: 50%; height: 112px; object-fit: cover; width: 112px; }
+.profile-photo > span { background: var(--green); color: #fff; display: grid; font-size: 2.8rem; font-weight: 700; place-items: center; }
+.profile-photo .icon-btn { bottom: 0; position: absolute; right: 0; }
 .profile-grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
 .profile-grid > div { background: #fafaf7; border-radius: 14px; padding: 18px; }
 .profile-grid h3 { margin-bottom: 8px; }
@@ -78,6 +84,10 @@
 .about-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .about-card h3 { margin: 9px 0 0; }
 .about-card > p { color: var(--muted); line-height: 1.55; }
+.bei-list { display: grid; gap: 12px; }
+.bei-card { align-items: center; display: grid; gap: 18px; grid-template-columns: 1fr auto auto; }
+.bei-card h3 { margin: 8px 0 5px; }
+.bei-card p { color: var(--muted); margin-bottom: 5px; }
 .rule-pending { border-left: 4px solid var(--orange); }
 .approval-actions { display: flex; gap: 8px; margin-top: 16px; }
 .about-comments { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
@@ -143,10 +153,12 @@
   .case-actions { flex-direction: column; }
   .correspondence-item { align-items: flex-start; flex-wrap: wrap; }
   .profile-grid { grid-template-columns: 1fr; }
+  .profile-head { align-items: flex-start; flex-wrap: wrap; }
   .profile-grid .wide-info { grid-column: auto; }
   .about-section-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .contact-filters { grid-template-columns: 1fr; }
   .page-actions { flex-direction: column; width: 100%; }
+  .bei-card { align-items: stretch; grid-template-columns: 1fr; }
 }
 
 @media print {

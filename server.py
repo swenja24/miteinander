@@ -27,6 +27,7 @@ MAX_BODY = 8_000_000
 RECEIPTS_DIR = DATA_DIR / "receipts"
 CASE_FILES_DIR = DATA_DIR / "case-files"
 DOCUMENT_FILES_DIR = DATA_DIR / "document-files"
+ABOUT_FILES_DIR = DATA_DIR / "about-files"
 COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -43,7 +44,7 @@ def empty_data() -> dict:
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
@@ -85,6 +86,7 @@ def load_data() -> dict:
     RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
     CASE_FILES_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    ABOUT_FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         loaded = json.loads(DATA_FILE.read_text("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -92,7 +94,7 @@ def load_data() -> dict:
     changed = False
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
@@ -184,6 +186,10 @@ def save_case_file(data_url: str, original_name: str = "Dokument") -> dict:
 
 def save_document_file(data_url: str, original_name: str = "Dokument") -> dict:
     return save_uploaded_file(data_url, original_name, DOCUMENT_FILES_DIR)
+
+
+def save_about_file(data_url: str, original_name: str = "Datei") -> dict:
+    return save_uploaded_file(data_url, original_name, ABOUT_FILES_DIR)
 
 
 def clean(value):
@@ -354,6 +360,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "aboutComments": data["aboutComments"],
                 "importantContacts": data["importantContacts"],
                 "contactOptions": data["contactOptions"],
+                "beis": data["beis"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
                 "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
@@ -425,6 +432,23 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+        if path.startswith("/api/about-files/") and method == "GET":
+            filename = path.rsplit("/", 1)[-1]
+            if not filename or filename != Path(filename).name:
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            attachment = ABOUT_FILES_DIR / filename
+            if not attachment.is_file():
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
+            content = attachment.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f"inline; filename={filename}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if path == "/api/family" and method == "PUT":
             if not self.allowed(user, "family"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
@@ -443,6 +467,50 @@ class Handler(SimpleHTTPRequestHandler):
                 data["personProfile"]["updatedByName"] = user["displayName"]
                 save_data(data)
             return self.send_json(200, data["personProfile"])
+
+        if path == "/api/profile-photo" and method == "PUT":
+            if not user.get("isAdmin"):
+                return self.send_json(403, {"error": "Das Profilfoto darf nur von Administratoren geändert werden."})
+            payload = self.read_json(); photo_data = str(payload.get("photoData") or "")
+            if not photo_data.startswith("data:image/"):
+                return self.send_json(400, {"error": "Bitte wähle ein Bild aus."})
+            saved = save_about_file(photo_data, str(payload.get("photoName") or "Profilfoto"))
+            old_photo = data["personProfile"].get("photoFile")
+            with lock:
+                data["personProfile"].update({"photoFile": saved["attachmentFile"], "photoName": saved["attachmentName"], "photoType": saved["attachmentType"], "updatedAt": now(), "updatedByName": user["displayName"]})
+                if old_photo: (ABOUT_FILES_DIR / Path(old_photo).name).unlink(missing_ok=True)
+                save_data(data)
+            return self.send_json(200, data["personProfile"])
+
+        bei_parts = path.strip("/").split("/")
+        if len(bei_parts) in (3, 4) and bei_parts[:3] == ["api", "about", "beis"]:
+            if not user.get("isAdmin"):
+                return self.send_json(403, {"error": "BEIs dürfen nur von Administratoren verwaltet werden."})
+            bei_id = bei_parts[3] if len(bei_parts) == 4 else None
+            if method == "POST" and not bei_id:
+                payload = self.read_json(); file_data = str(payload.pop("beiFile", "")); file_name = str(payload.pop("beiFileName", "BEI.pdf"))
+                if not file_data.startswith("data:application/pdf"):
+                    return self.send_json(400, {"error": "Ein BEI muss als PDF hochgeladen werden."})
+                bei = {"id": str(uuid.uuid4()), **clean(payload), **save_about_file(file_data, file_name), "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                with lock: data["beis"].insert(0, bei); save_data(data)
+                return self.send_json(201, bei)
+            bei = next((item for item in data["beis"] if item["id"] == bei_id), None)
+            if not bei: return self.send_json(404, {"error": "BEI nicht gefunden."})
+            if method == "PUT":
+                payload = self.read_json(); file_data = str(payload.pop("beiFile", "")); file_name = str(payload.pop("beiFileName", "BEI.pdf"))
+                bei.update(clean(payload)); bei["updatedAt"] = now(); bei["updatedByName"] = user["displayName"]
+                if file_data:
+                    if not file_data.startswith("data:application/pdf"): return self.send_json(400, {"error": "Ein BEI muss als PDF hochgeladen werden."})
+                    old_file = bei.get("attachmentFile"); bei.update(save_about_file(file_data, file_name))
+                    if old_file: (ABOUT_FILES_DIR / Path(old_file).name).unlink(missing_ok=True)
+                with lock: save_data(data)
+                return self.send_json(200, bei)
+            if method == "DELETE":
+                with lock:
+                    data["beis"].remove(bei)
+                    if bei.get("attachmentFile"): (ABOUT_FILES_DIR / Path(bei["attachmentFile"]).name).unlink(missing_ok=True)
+                    save_data(data)
+                return self.send_json(200, {"ok": True})
 
         if path == "/api/contact-options" and method == "PUT":
             if not user.get("isAdmin"):
