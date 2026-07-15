@@ -11,7 +11,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Dokumentenregister mit Zuordnung zu Anträgen
 - Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
 - Familienbereich mit beteiligten Personen und Rollen
-- Antragsakten mit Ergänzungsanträgen, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
+- Antragsakten mit Ergänzungsanträgen, neutraler Ereignis- und Fristentimeline, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Responsive, tastaturbedienbare Oberfläche
 

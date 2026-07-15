@@ -56,6 +56,12 @@
 .correspondence-item p { color: var(--muted); margin: 3px 0; }
 .correspondence-item time { color: var(--muted); font-size: .82rem; }
 .correspondence-direction { background: var(--green-soft); border-radius: 999px; color: var(--green); font-size: .7rem; font-weight: 800; padding: 5px 9px; }
+.next-deadline { border-left: 3px solid var(--orange); display: grid; gap: 2px; margin-top: 12px; padding-left: 10px; }
+.next-deadline small, .next-deadline span { color: var(--muted); font-size: .75rem; }
+.next-deadline.overdue { border-color: #a33d30; }
+.next-deadline.overdue strong, .deadline-overdue time { color: #a33d30; }
+.correspondence-item.deadline-overdue { background: #fff3ed; border-color: #e7b9a6; }
+.correspondence-item.deadline-met { opacity: .72; }
 .case-file { color: var(--green); display: inline-block; font-size: .8rem; font-weight: 700; margin-top: 6px; text-decoration: none; }
 .child-cases > .case-card { border-left: 4px solid var(--purple); margin-top: 12px; }
 

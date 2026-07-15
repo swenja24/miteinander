@@ -230,6 +230,33 @@ def ensure_rolling_tasks(value: dict) -> bool:
     return changed
 
 
+def sync_deadline_reminder(entry: dict, user: dict) -> None:
+    task_id = entry.get("reminderTaskId")
+    existing = next((task for task in data.get("tasks", []) if task.get("id") == task_id), None)
+    days = str(entry.get("reminderDays") or "none")
+    if entry.get("eventType") != "deadline" or days == "none" or not entry.get("date") or entry.get("deadlineStatus") in {"met", "cancelled"}:
+        if existing:
+            data["tasks"].remove(existing)
+        entry.pop("reminderTaskId", None)
+        return
+    application = next((case for case in data.get("cases", []) if case.get("id") == entry.get("caseId")), {})
+    reminder_date = date.fromisoformat(entry["date"]) - timedelta(days=int(days))
+    due = max(reminder_date, date.today()).isoformat()
+    values = {
+        "title": f"Frist: {entry.get('subject') or 'Antrag prüfen'} – {application.get('title') or 'Antrag'}",
+        "category": "Anträge", "assignee": application.get("assignee") or "", "due": due,
+        "status": "planned", "recurrence": "once",
+        "notes": f"Fristdatum: {entry['date']}\n{entry.get('source') or 'Frist aus der Antragsakte'}\n{entry.get('notes') or ''}".strip(),
+        "caseDeadlineId": entry["id"], "updatedAt": now(),
+    }
+    if existing:
+        existing.update(values)
+    else:
+        task = {"id": str(uuid.uuid4()), **values, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "history": []}
+        data["tasks"].insert(0, task)
+        entry["reminderTaskId"] = task["id"]
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "Miteinander/0.1"
 
@@ -481,6 +508,8 @@ class Handler(SimpleHTTPRequestHandler):
                     item["receiptStatus"] = "available"
                 if case_file:
                     item.update(save_case_file(case_file, str(case_file_name)))
+                if collection == "correspondence":
+                    sync_deadline_reminder(item, user)
                 if collection == "ledger":
                     for field, key in (("description", "descriptions"), ("category", "categories")):
                         value = item.get(field)
@@ -520,6 +549,8 @@ class Handler(SimpleHTTPRequestHandler):
                     data[collection][index].update(save_case_file(case_file, str(case_file_name)))
                     if old_attachment:
                         (CASE_FILES_DIR / Path(old_attachment).name).unlink(missing_ok=True)
+                if collection == "correspondence":
+                    sync_deadline_reminder(data[collection][index], user)
                 elif collection == "ledger" and data[collection][index].get("receiptStatus") == "none":
                     old_receipt = data[collection][index].pop("receiptFile", None)
                     data[collection][index].pop("receipt", None)
@@ -542,6 +573,8 @@ class Handler(SimpleHTTPRequestHandler):
                     save_data(data)
                     return self.send_json(200, {"ok": True, "pendingAdminConfirmation": True})
                 removed = data[collection].pop(index)
+                if collection == "correspondence" and removed.get("reminderTaskId"):
+                    data["tasks"] = [task for task in data["tasks"] if task.get("id") != removed["reminderTaskId"]]
                 if collection in {"cases", "correspondence"} and removed.get("attachmentFile"):
                     (CASE_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
                 save_data(data)

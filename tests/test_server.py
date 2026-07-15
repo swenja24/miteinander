@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260715-7', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-7") as response:
+            self.assertIn('/app.js?v=20260715-8', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260715-8") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -71,6 +71,8 @@ class ServerTest(unittest.TestCase):
         _, application = self.call("/api/cases", "POST", {
             "title": "Antrag auf Assistenz", "authority": "Sozialamt",
             "assignee": initial["members"][0]["id"], "status": "submitted",
+            "area": "Eingliederungshilfe", "submittedAt": date.today().isoformat(),
+            "receivedAt": date.today().isoformat(),
             "caseFile": "data:application/pdf;base64," + pdf, "caseFileName": "Antrag.pdf",
         }, cookie)
         self.assertEqual(application["status"], "submitted")
@@ -80,11 +82,28 @@ class ServerTest(unittest.TestCase):
         }, cookie)
         self.assertEqual(child["parentCaseId"], application["id"])
         _, letter = self.call("/api/correspondence", "POST", {
-            "caseId": application["id"], "direction": "incoming", "date": date.today().isoformat(),
+            "caseId": application["id"], "eventType": "correspondence", "direction": "incoming", "date": date.today().isoformat(),
             "subject": "Rückfrage der Behörde", "caseFile": "data:application/pdf;base64," + pdf,
             "caseFileName": "Rueckfrage.pdf",
         }, cookie)
         self.assertEqual(letter["caseId"], application["id"])
+        deadline_date = (date.today() + timedelta(days=14)).isoformat()
+        _, deadline = self.call("/api/correspondence", "POST", {
+            "caseId": application["id"], "eventType": "deadline", "date": deadline_date,
+            "subject": "Unterlagen nachreichen", "deadlineType": "authority",
+            "deadlineStatus": "open", "reminderDays": "7", "source": "Schreiben vom Sozialamt",
+        }, cookie)
+        self.assertEqual(deadline["date"], deadline_date)
+        self.assertEqual(deadline["deadlineType"], "authority")
+        self.assertTrue(deadline["reminderTaskId"])
+        _, with_reminder = self.call("/api/data", cookie=cookie)
+        reminder = next(task for task in with_reminder["tasks"] if task.get("caseDeadlineId") == deadline["id"])
+        self.assertEqual(reminder["due"], (date.today() + timedelta(days=7)).isoformat())
+        _, completed_deadline = self.call("/api/correspondence/" + deadline["id"], "PUT", {
+            "deadlineStatus": "met", "eventType": "deadline", "date": deadline_date,
+            "subject": "Unterlagen nachreichen", "reminderDays": "7",
+        }, cookie)
+        self.assertNotIn("reminderTaskId", completed_deadline)
         request = urllib.request.Request("http://127.0.0.1:8765/api/case-files/" + letter["attachmentFile"], headers={"Cookie": cookie})
         with urllib.request.urlopen(request) as response:
             self.assertEqual(response.headers.get_content_type(), "application/pdf")
