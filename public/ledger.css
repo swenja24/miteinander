@@ -95,6 +95,7 @@
 .contact-address { white-space: normal; }
 .contact-notes { background: #fafaf7; border-radius: 10px; line-height: 1.5; padding: 11px; }
 .contact-card > small { color: var(--muted); display: block; margin-top: 14px; }
+.page-actions { display: flex; gap: 9px; }
 
 .receipt-link {
   display: block;
@@ -145,6 +146,7 @@
   .profile-grid .wide-info { grid-column: auto; }
   .about-section-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .contact-filters { grid-template-columns: 1fr; }
+  .page-actions { flex-direction: column; width: 100%; }
 }
 
 @media print {

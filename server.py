@@ -44,6 +44,7 @@ def empty_data() -> dict:
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
         "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
+        "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
         "accounts": [
@@ -92,6 +93,7 @@ def load_data() -> dict:
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
         "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
+        "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
             loaded[key] = default
@@ -351,6 +353,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "rules": data["rules"],
                 "aboutComments": data["aboutComments"],
                 "importantContacts": data["importantContacts"],
+                "contactOptions": data["contactOptions"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
                 "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
@@ -440,6 +443,17 @@ class Handler(SimpleHTTPRequestHandler):
                 data["personProfile"]["updatedByName"] = user["displayName"]
                 save_data(data)
             return self.send_json(200, data["personProfile"])
+
+        if path == "/api/contact-options" and method == "PUT":
+            if not user.get("isAdmin"):
+                return self.send_json(403, {"error": "Kontaktkategorien dürfen nur von Administratoren geändert werden."})
+            values = self.read_json().get("categories")
+            if not isinstance(values, list):
+                return self.send_json(400, {"error": "Kategorien müssen als Liste übermittelt werden."})
+            with lock:
+                data["contactOptions"]["categories"] = list(dict.fromkeys(clean(str(value)) for value in values if str(value).strip()))[:200]
+                save_data(data)
+            return self.send_json(200, data["contactOptions"])
 
         contact_parts = path.strip("/").split("/")
         if len(contact_parts) in (2, 3) and contact_parts[:2] == ["api", "contacts"]:

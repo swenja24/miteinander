@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-3', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-3") as response:
+            self.assertIn('/app.js?v=20260716-4', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-4") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -88,6 +88,13 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 403)
         _, changed = self.call("/api/contacts/" + contact["id"], "PUT", {"phone": "+49 999 000"}, admin_cookie)
         self.assertEqual(changed["phone"], "+49 999 000")
+        _, options = self.call("/api/contact-options", "PUT", {
+            "categories": ["Familie", "Fahrdienst", "WfB", "Medizin"],
+        }, admin_cookie)
+        self.assertEqual(options["categories"], ["Familie", "Fahrdienst", "WfB", "Medizin"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/contact-options", "PUT", {"categories": ["Nicht erlaubt"]}, viewer_cookie)
+        self.assertEqual(error.exception.code, 403)
 
     def test_document_scan_or_pdf_upload_is_protected(self):
         cookie = self.login()
