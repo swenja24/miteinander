@@ -13,6 +13,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Familienbereich mit beteiligten Personen und Rollen
 - Antragsakten mit Ergänzungsanträgen, neutraler Ereignis- und Fristentimeline, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
 - Gemeinsamer Bereich „Über Linea“ mit Personenprofil, Zielen, Kommentarverlauf und administrativ freigegebenen Regeln
+- Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Responsive, tastaturbedienbare Oberfläche
 

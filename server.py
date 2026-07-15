@@ -43,7 +43,7 @@ def empty_data() -> dict:
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
         "accounts": [
@@ -91,7 +91,7 @@ def load_data() -> dict:
     changed = False
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [],
     }.items():
         if key not in loaded:
             loaded[key] = default
@@ -350,6 +350,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "goals": data["goals"],
                 "rules": data["rules"],
                 "aboutComments": data["aboutComments"],
+                "importantContacts": data["importantContacts"],
                 "cases": data["cases"] if self.allowed(user, "cases") else [],
                 "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
                 "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
@@ -439,6 +440,36 @@ class Handler(SimpleHTTPRequestHandler):
                 data["personProfile"]["updatedByName"] = user["displayName"]
                 save_data(data)
             return self.send_json(200, data["personProfile"])
+
+        contact_parts = path.strip("/").split("/")
+        if len(contact_parts) in (2, 3) and contact_parts[:2] == ["api", "contacts"]:
+            contact_id = contact_parts[2] if len(contact_parts) == 3 else None
+            if method == "POST" and not contact_id:
+                payload = clean(self.read_json())
+                if not payload.get("name"):
+                    return self.send_json(400, {"error": "Bitte gib einen Namen oder eine Organisation an."})
+                contact = {"id": str(uuid.uuid4()), **payload, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                with lock:
+                    data["importantContacts"].insert(0, contact)
+                    save_data(data)
+                return self.send_json(201, contact)
+            contact = next((entry for entry in data["importantContacts"] if entry["id"] == contact_id), None)
+            if not contact:
+                return self.send_json(404, {"error": "Kontakt nicht gefunden."})
+            may_change = bool(user.get("isAdmin") or contact.get("createdByUserId") == user["id"])
+            if method == "PUT":
+                if not may_change:
+                    return self.send_json(403, {"error": "Du kannst nur eigene Kontakte bearbeiten."})
+                contact.update(clean(self.read_json())); contact["updatedAt"] = now(); contact["updatedByName"] = user["displayName"]
+                with lock: save_data(data)
+                return self.send_json(200, contact)
+            if method == "DELETE":
+                if not may_change:
+                    return self.send_json(403, {"error": "Du kannst nur eigene Kontakte löschen."})
+                with lock:
+                    data["importantContacts"].remove(contact)
+                    save_data(data)
+                return self.send_json(200, {"ok": True})
 
         about_parts = path.strip("/").split("/")
         if len(about_parts) in (3, 4) and about_parts[:2] == ["api", "about"] and about_parts[2] in {"goals", "rules", "comments"}:

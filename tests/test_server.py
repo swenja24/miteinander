@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-2', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-2") as response:
+            self.assertIn('/app.js?v=20260716-3', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-3") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -63,6 +63,31 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(self.temp.name, "familie.json"), encoding="utf-8") as file:
             stored = json.loads(file.read())
         self.assertEqual(stored["tasks"][0]["title"], "Bescheid prüfen")
+
+    def test_important_contacts_are_shared_but_safely_editable(self):
+        admin_cookie = self.login()
+        self.call("/api/users", "POST", {
+            "username": "contactowner", "displayName": "Kontaktpflege",
+            "password": "sicheres-passwort", "role": "Assistenz", "permissions": {},
+        }, admin_cookie)
+        self.call("/api/users", "POST", {
+            "username": "contactviewer", "displayName": "Kontaktansicht",
+            "password": "sicheres-passwort", "role": "Assistenz", "permissions": {},
+        }, admin_cookie)
+        owner_cookie = self.login("contactowner", "sicheres-passwort")
+        viewer_cookie = self.login("contactviewer", "sicheres-passwort")
+        _, contact = self.call("/api/contacts", "POST", {
+            "name": "Frau Beispiel", "category": "WfB / Arbeit",
+            "organization": "Beispiel-WfB", "role": "Teamleitung",
+            "phone": "+49 123 456", "email": "kontakt@example.de",
+        }, owner_cookie)
+        _, visible = self.call("/api/data", cookie=viewer_cookie)
+        self.assertIn(contact["id"], [entry["id"] for entry in visible["importantContacts"]])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/contacts/" + contact["id"], "PUT", {"phone": "Nicht erlaubt"}, viewer_cookie)
+        self.assertEqual(error.exception.code, 403)
+        _, changed = self.call("/api/contacts/" + contact["id"], "PUT", {"phone": "+49 999 000"}, admin_cookie)
+        self.assertEqual(changed["phone"], "+49 999 000")
 
     def test_document_scan_or_pdf_upload_is_protected(self):
         cookie = self.login()

@@ -85,6 +85,16 @@
 .about-comments article > div { display: flex; gap: 10px; justify-content: space-between; }
 .about-comments time { color: var(--muted); font-size: .75rem; }
 .about-comments p { color: var(--ink); margin: 5px 0 0; }
+.contact-filters { display: grid; gap: 16px; grid-template-columns: 2fr 1fr; margin-bottom: 20px; }
+.contact-filters input, .contact-filters select { margin-top: 7px; }
+.contact-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.contact-card h2 { font-size: 1.35rem; margin: 9px 0 0; }
+.contact-card > p { color: var(--muted); }
+.contact-links { display: grid; gap: 7px; margin: 16px 0; }
+.contact-links a { color: var(--green); font-weight: 700; text-decoration: none; }
+.contact-address { white-space: normal; }
+.contact-notes { background: #fafaf7; border-radius: 10px; line-height: 1.5; padding: 11px; }
+.contact-card > small { color: var(--muted); display: block; margin-top: 14px; }
 
 .receipt-link {
   display: block;
@@ -134,6 +144,7 @@
   .profile-grid { grid-template-columns: 1fr; }
   .profile-grid .wide-info { grid-column: auto; }
   .about-section-head { align-items: stretch; flex-direction: column; gap: 12px; }
+  .contact-filters { grid-template-columns: 1fr; }
 }
 
 @media print {
