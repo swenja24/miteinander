@@ -37,3 +37,20 @@
   flex: 1;
   min-width: 0;
 }
+.invitation-list { display: grid; gap: 12px; }
+.invitation-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.invitation-card strong,
+.invitation-card small { display: block; }
+.invitation-card small { color: var(--muted); margin-top: 4px; }
+.copy-link { display: flex; gap: 8px; }
+.copy-link input { min-width: 0; }
+.user-card .secondary { padding: 8px 10px; }
+@media (max-width: 600px) {
+  .copy-link,
+  .invitation-card { align-items: stretch; flex-direction: column; }
+}

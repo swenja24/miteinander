@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f7f5ef">
   <title>Miteinander – Eingliederungshilfe organisieren</title>
-  <link rel="stylesheet" href="/fonts/fonts.css?v=20260717-1">
-  <link rel="stylesheet" href="/styles.css?v=20260717-1">
-  <link rel="stylesheet" href="/ledger.css?v=20260717-1">
-  <link rel="stylesheet" href="/team.css?v=20260717-1">
+  <link rel="stylesheet" href="/fonts/fonts.css?v=20260721-1">
+  <link rel="stylesheet" href="/styles.css?v=20260721-1">
+  <link rel="stylesheet" href="/ledger.css?v=20260721-1">
+  <link rel="stylesheet" href="/team.css?v=20260721-1">
 </head>
 <body>
   <div id="login" class="login-shell">
-    <main class="login-card">
+    <main class="login-card" id="login-card">
       <div class="brand-mark" aria-hidden="true">M</div>
-      <p class="eyebrow">Sicherer Team-Bereich</p>
+      <p class="eyebrow">Sicherer gemeinsamer Bereich</p>
       <h1>Willkommen bei<br><em>Miteinander</em></h1>
       <p class="lede">Anträge, Fristen, Unterlagen und Ausgaben an einem ruhigen Ort.</p>
       <form id="login-form">
@@ -26,6 +26,22 @@
         <button class="primary wide" type="submit">Sicher anmelden <span>→</span></button>
       </form>
       <p class="privacy-note">Deine Daten bleiben auf deinem eigenen Server.</p>
+    </main>
+    <main class="login-card hidden" id="invite-card">
+      <div class="brand-mark" aria-hidden="true">M</div>
+      <p class="eyebrow">Einladung zu Miteinander</p>
+      <h1>Deinen Zugang<br><em>einrichten</em></h1>
+      <form id="invite-accept-form">
+        <label>Anzeigename</label><input name="displayName" required>
+        <label>Benutzername</label><input name="username" minlength="3" autocomplete="username" required>
+        <label>Passwort</label><input name="password" type="password" minlength="8" autocomplete="new-password" required>
+        <label>E-Mail (optional)</label><input name="email" type="email">
+        <label>Telefon (optional)</label><input name="phone" type="tel">
+        <label>Ein paar persönliche Worte</label><textarea name="personalWords"></textarea>
+        <label>Foto (optional)</label><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="user">
+        <p id="invite-error" class="error" role="alert"></p>
+        <button class="primary wide">Zugang erstellen</button>
+      </form>
     </main>
   </div>
 
@@ -40,7 +56,8 @@
         <a href="#tasks" data-page="tasks"><span>✓</span> Aufgaben</a>
         <a href="#documents" data-page="documents"><span>▤</span> Dokumente</a>
         <a href="#ledger" data-page="ledger"><span>€</span> Kassenbuch</a>
-        <a href="#family" data-page="family"><span>♧</span> Team</a>
+        <a href="#team" data-page="team"><span>♧</span> Team</a>
+        <a href="#family" data-page="family"><span>⌘</span> Familie</a>
       </nav>
       <div class="sidebar-foot"><button id="logout" class="text-btn">Abmelden</button><small>Selbst gehostet · Version 0.1</small></div>
     </aside>
@@ -51,6 +68,6 @@
 
   <dialog id="modal"><div class="modal-card"><button class="modal-close" type="button" aria-label="Schließen">×</button><div id="modal-content"></div></div></dialog>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/app.js?v=20260717-1"></script>
+  <script type="module" src="/app.js?v=20260721-1"></script>
 </body>
 </html>

@@ -46,7 +46,7 @@ def empty_data() -> dict:
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
@@ -98,7 +98,7 @@ def load_data() -> dict:
     changed = False
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
@@ -138,6 +138,10 @@ def load_data() -> dict:
             "passwordHash": hash_password(PASSWORD), "createdAt": now(),
         }]
         changed = True
+    for existing_user in loaded.get("users", []):
+        if "accessStatus" not in existing_user:
+            existing_user["accessStatus"] = "active" if existing_user.get("active", True) else "deactivated"
+            changed = True
     if changed or not DATA_FILE.exists():
         save_data(loaded)
     return loaded
@@ -332,7 +336,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not session or session["expires"] < time.time():
             sessions.pop(item.value, None)
             return None
-        return next((u for u in data.get("users", []) if u["id"] == session["userId"]), None)
+        return next((u for u in data.get("users", []) if u["id"] == session["userId"] and u.get("active", True) and u.get("accessStatus", "active") == "active"), None)
 
     @staticmethod
     def allowed(user: dict, permission: str) -> bool:
@@ -345,11 +349,31 @@ class Handler(SimpleHTTPRequestHandler):
     def api(self, method: str, path: str):
         if path == "/api/health":
             return self.send_json(200, {"ok": True})
+        invite_parts = path.strip("/").split("/")
+        if len(invite_parts) == 4 and invite_parts[:2] == ["api", "invitations"] and invite_parts[3] == "accept" and method == "POST":
+            token = invite_parts[2]
+            invitation = next((item for item in data.get("invitations", []) if item.get("tokenHash") == hashlib.sha256(token.encode()).hexdigest()), None)
+            if not invitation or invitation.get("acceptedAt") or invitation.get("revokedAt") or invitation.get("expiresAt", "") < now():
+                return self.send_json(410, {"error": "Diese Einladung ist ungültig oder abgelaufen."})
+            payload = self.read_json(); username = str(payload.get("username", "")).strip().lower(); password = str(payload.get("password", ""))
+            if len(username) < 3 or any(u["username"].lower() == username for u in data.get("users", [])):
+                return self.send_json(400, {"error": "Der Benutzername ist zu kurz oder bereits vergeben."})
+            if len(password) < 8: return self.send_json(400, {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."})
+            display_name = clean(str(payload.get("displayName") or invitation.get("displayName") or username)); role = invitation.get("role") or "Assistenz"
+            member = {"id": str(uuid.uuid4()), "name": display_name, "role": role, "email": clean(str(payload.get("email") or invitation.get("email") or "")), "phone": clean(str(payload.get("phone") or "")), "personalWords": clean(str(payload.get("personalWords") or "")), "color": "#285c4d", "createdAt": now()}
+            photo_data = str(payload.get("photoData") or "")
+            if photo_data: member.update(save_member_photo(photo_data, str(payload.get("photoName") or "Profilfoto")))
+            is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
+            created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": full_permissions() if is_admin else invitation.get("permissions", {}), "passwordHash": hash_password(password), "createdAt": now()}
+            with lock:
+                data["members"].append(member); data["users"].append(created); invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = created["id"]; save_data(data)
+            token_value = secrets.token_urlsafe(32); sessions[token_value] = {"userId": created["id"], "expires": time.time() + 43200}
+            return self.send_json(201, {"ok": True, "user": self.public_user(created)}, {"Set-Cookie": f"miteinander_session={token_value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"})
         if path == "/api/login" and method == "POST":
             credentials = self.read_json()
             username = str(credentials.get("username") or "linea").strip().lower()
             supplied = str(credentials.get("password", ""))
-            user = next((u for u in data.get("users", []) if u.get("active", True) and u.get("username", "").lower() == username), None)
+            user = next((u for u in data.get("users", []) if u.get("active", True) and u.get("accessStatus", "active") == "active" and u.get("username", "").lower() == username), None)
             if not user or not password_matches(supplied, user.get("passwordHash", "")):
                 return self.send_json(401, {"error": "Benutzername oder Passwort stimmen nicht."})
             token = secrets.token_urlsafe(32)
@@ -387,9 +411,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "ledger": data["ledger"] if self.allowed(user, "ledger") else [],
                 "accounts": data["accounts"] if self.allowed(user, "ledger") else [],
                 "ledgerOptions": data.get("ledgerOptions", {"descriptions": [], "categories": []}) if self.allowed(user, "ledger") else {"descriptions": [], "categories": []},
-                "members": data["members"] if self.allowed(user, "tasks") or self.allowed(user, "family") else [],
+                "members": data["members"],
                 "currentUser": self.public_user(user),
                 "users": [self.public_user(u) for u in data["users"]] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"]} for u in data["users"]],
+                "invitations": [{key: value for key, value in item.items() if key != "tokenHash"} for item in data.get("invitations", [])] if user.get("isAdmin") else [],
                 "capabilities": {key: self.allowed(user, key) for key in PERMISSION_KEYS} | {"manageAccess": bool(user.get("isAdmin"))},
             }
             return self.send_json(200, visible)
@@ -478,7 +503,6 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "private, max-age=3600"); self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers(); self.wfile.write(content); return
         if path.startswith("/api/member-files/") and method == "GET":
-            if not self.allowed(user, "family"): return self.send_json(403, {"error": "Kein Zugriff auf das Team."})
             filename = path.rsplit("/", 1)[-1]
             if not filename or filename != Path(filename).name: return self.send_json(404, {"error": "Foto nicht gefunden."})
             attachment = MEMBER_FILES_DIR / filename
@@ -488,7 +512,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content))); self.send_header("Cache-Control", "private, max-age=3600")
             self.send_header("X-Content-Type-Options", "nosniff"); self.end_headers(); self.wfile.write(content); return
         if path == "/api/family" and method == "PUT":
-            if not self.allowed(user, "family"):
+            if not user.get("isAdmin"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
             with lock:
                 data["family"].update(clean(self.read_json()))
@@ -707,6 +731,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"ok": True})
 
         user_parts = path.strip("/").split("/")
+        if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "invitations"]:
+            if not user.get("isAdmin"): return self.send_json(403, {"error": "Nur Administrator*innen dürfen Einladungen verwalten."})
+            invitation_id = user_parts[2] if len(user_parts) == 3 else None
+            if method == "POST" and not invitation_id:
+                payload = self.read_json(); role = str(payload.get("role") or "Assistenz"); token = secrets.token_urlsafe(32)
+                days = max(1, min(30, int(payload.get("validDays") or 7)))
+                expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + days * 86400))
+                is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
+                invitation = {"id": str(uuid.uuid4()), "tokenHash": hashlib.sha256(token.encode()).hexdigest(), "displayName": clean(str(payload.get("displayName") or "")), "email": clean(str(payload.get("email") or "")), "role": role, "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}, "expiresAt": expires, "createdAt": now(), "createdByName": user["displayName"]}
+                with lock: data.setdefault("invitations", []).insert(0, invitation); save_data(data)
+                return self.send_json(201, {**{key: value for key, value in invitation.items() if key != "tokenHash"}, "token": token})
+            invitation = next((item for item in data.get("invitations", []) if item["id"] == invitation_id), None)
+            if not invitation: return self.send_json(404, {"error": "Einladung nicht gefunden."})
+            if method == "DELETE":
+                invitation["revokedAt"] = now(); invitation["revokedByName"] = user["displayName"]; save_data(data); return self.send_json(200, {"ok": True})
+            return self.send_json(405, {"error": "Methode nicht erlaubt."})
         if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "users"]:
             if not user.get("isAdmin"):
                 return self.send_json(403, {"error": "Nur Linea und die gesetzliche Betreuung dürfen Zugänge verwalten."})
@@ -720,12 +760,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if len(password) < 8:
                     return self.send_json(400, {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."})
                 role = str(payload.get("role") or "Angehörige")
-                is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung"}
+                is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
                 created = {
                     "id": str(uuid.uuid4()), "username": username,
                     "displayName": clean(str(payload.get("displayName") or username)), "role": role,
                     "memberId": payload.get("memberId") or None, "isAdmin": is_admin,
-                    "active": True,
+                    "active": True, "accessStatus": "active",
                     "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS},
                     "passwordHash": hash_password(password), "createdAt": now(),
                 }
@@ -735,9 +775,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not target: return self.send_json(404, {"error": "Zugang nicht gefunden."})
             if method == "PUT":
                 payload = self.read_json(); role = str(payload.get("role") or target["role"])
-                target.update({"displayName": clean(str(payload.get("displayName") or target["displayName"])), "role": role, "memberId": payload.get("memberId") or None})
-                target["isAdmin"] = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung"}
-                target["permissions"] = full_permissions() if target["isAdmin"] else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}
+                target.update({"displayName": clean(str(payload.get("displayName") or target["displayName"])), "role": role})
+                if "memberId" in payload: target["memberId"] = payload.get("memberId") or None
+                target["isAdmin"] = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
+                if "permissions" in payload: target["permissions"] = full_permissions() if target["isAdmin"] else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}
+                if payload.get("accessStatus") in {"active", "paused"}: target["accessStatus"] = payload["accessStatus"]; target["active"] = True
                 if payload.get("password"):
                     if len(str(payload["password"])) < 8: return self.send_json(400, {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."})
                     target["passwordHash"] = hash_password(str(payload["password"]))
@@ -746,7 +788,7 @@ class Handler(SimpleHTTPRequestHandler):
             if method == "DELETE":
                 if target["id"] == user["id"]: return self.send_json(400, {"error": "Du kannst deinen eigenen Zugang nicht löschen."})
                 with lock:
-                    target["active"] = False
+                    target["active"] = False; target["accessStatus"] = "deactivated"
                     for token, session in list(sessions.items()):
                         if session["userId"] == target["id"]: sessions.pop(token, None)
                     save_data(data)

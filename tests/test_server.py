@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260717-1', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260717-1") as response:
+            self.assertIn('/app.js?v=20260721-1', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-1") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -397,6 +397,52 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen("http://127.0.0.1:8765/api/member-files/" + member["photoFile"])
         self.assertEqual(error.exception.code, 401)
+
+    def test_one_time_invitation_creates_profile_and_pause_blocks_access(self):
+        admin_cookie = self.login()
+        _, invitation = self.call("/api/invitations", "POST", {
+            "displayName": "Neue Assistenz", "email": "neu@example.de", "role": "Assistenz",
+            "validDays": 7, "permissions": {"tasks": True, "documents": True},
+        }, admin_cookie)
+        self.assertIn("token", invitation)
+        response, accepted = self.call("/api/invitations/" + invitation["token"] + "/accept", "POST", {
+            "displayName": "Mara Assistenz", "username": "mara-neu", "password": "sicheres-passwort",
+            "personalWords": "Ich freue mich auf die Zusammenarbeit.",
+        })
+        user_cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+        self.assertEqual(accepted["user"]["accessStatus"], "active")
+        _, visible = self.call("/api/data", cookie=user_cookie)
+        self.assertTrue(visible["capabilities"]["tasks"])
+        self.assertFalse(visible["currentUser"]["isAdmin"])
+        self.assertIn("Mara Assistenz", [member["name"] for member in visible["members"]])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/invitations/" + invitation["token"] + "/accept", "POST", {
+                "displayName": "Nochmal", "username": "nochmal", "password": "sicheres-passwort",
+            })
+        self.assertEqual(error.exception.code, 410)
+        user_id = accepted["user"]["id"]
+        _, paused = self.call("/api/users/" + user_id, "PUT", {"accessStatus": "paused"}, admin_cookie)
+        self.assertEqual(paused["accessStatus"], "paused")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/data", cookie=user_cookie)
+        self.assertEqual(error.exception.code, 401)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.login("mara-neu", "sicheres-passwort")
+        self.assertEqual(error.exception.code, 401)
+        _, active = self.call("/api/users/" + user_id, "PUT", {"accessStatus": "active"}, admin_cookie)
+        self.assertEqual(active["accessStatus"], "active")
+        self.assertIsNotNone(self.login("mara-neu", "sicheres-passwort"))
+
+    def test_close_relative_role_gets_explicit_admin_access(self):
+        admin_cookie = self.login()
+        _, invitation = self.call("/api/invitations", "POST", {
+            "displayName": "Enger Angehöriger", "role": "Enge Angehörige", "validDays": 7,
+        }, admin_cookie)
+        _, accepted = self.call("/api/invitations/" + invitation["token"] + "/accept", "POST", {
+            "displayName": "Enger Angehöriger", "username": "eng-angehoerig", "password": "sicheres-passwort",
+        })
+        self.assertTrue(accepted["user"]["isAdmin"])
+        self.assertTrue(all(accepted["user"]["permissions"].values()))
 
 
 if __name__ == "__main__": unittest.main()
