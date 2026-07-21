@@ -17,6 +17,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
 - Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
+- Getrennte persönliche und gemeinsame WG-Bereiche mit einem Login, Bereichsumschalter, eigener Gemeinschaftskasse und gemeinsamen Aufgaben
 - Responsive, tastaturbedienbare Oberfläche
 
 > Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
@@ -36,6 +37,8 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 4. Im Browser `http://SERVER-IP:3080` öffnen.
 
 Die Daten liegen im Docker-Volume `miteinander_data`. Der Container kann neu gebaut oder aktualisiert werden, ohne die Daten zu verlieren.
+
+Beim ersten Start der Mehrbereichsversion werden vorhandene Daten automatisch dem bisherigen persönlichen Bereich zugeordnet. Gemeinsame WG-Bereiche werden anschließend im Familien-Steuerungszentrum angelegt. Inhalte werden nicht zwischen Bereichen kopiert; Aufgaben, Buchungen und Infobrett-Einträge gehören immer genau zu dem Bereich, in dem sie erstellt wurden.
 
 ## Automatische Images auf GHCR
 

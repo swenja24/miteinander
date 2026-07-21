@@ -44,6 +44,7 @@ COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "led
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
 PERMISSION_KEYS = ("cases", "tasks", "documents", "ledger", "family")
+WORKSPACE_COLLECTIONS = ("cases", "correspondence", "tasks", "documents", "ledger", "accounts", "members", "announcements", "topicComments", "goals", "rules", "aboutComments", "importantContacts", "beis", "routinePlans")
 
 
 def now() -> str:
@@ -153,6 +154,19 @@ def load_data() -> dict:
     for existing_user in loaded.get("users", []):
         if "accessStatus" not in existing_user:
             existing_user["accessStatus"] = "active" if existing_user.get("active", True) else "deactivated"
+            changed = True
+    if not loaded.get("workspaces"):
+        workspace_id = str(uuid.uuid4())
+        loaded["workspaces"] = [{"id": workspace_id, "name": loaded.get("family", {}).get("name") or "Lineas Bereich", "type": "private", "personName": loaded.get("family", {}).get("person") or "Linea", "createdAt": now()}]
+        for key in WORKSPACE_COLLECTIONS:
+            for item in loaded.get(key, []): item.setdefault("workspaceId", workspace_id)
+        for existing_user in loaded.get("users", []):
+            existing_user["workspaceMemberships"] = [{"workspaceId": workspace_id, "role": existing_user.get("role", "Assistenz"), "isAdmin": bool(existing_user.get("isAdmin")), "permissions": existing_user.get("permissions", {})}]
+        changed = True
+    default_workspace_id = loaded["workspaces"][0]["id"]
+    for existing_user in loaded.get("users", []):
+        if not existing_user.get("workspaceMemberships"):
+            existing_user["workspaceMemberships"] = [{"workspaceId": default_workspace_id, "role": existing_user.get("role", "Assistenz"), "isAdmin": bool(existing_user.get("isAdmin")), "permissions": existing_user.get("permissions", {})}]
             changed = True
     if changed or not DATA_FILE.exists():
         save_data(loaded)
@@ -316,9 +330,9 @@ def sync_deadline_reminder(entry: dict, user: dict) -> None:
         entry["reminderTaskId"] = task["id"]
 
 
-def mentioned_user_ids(text: str) -> list[str]:
+def mentioned_user_ids(text: str, workspace_id: str | None = None) -> list[str]:
     lowered = text.lower()
-    return [user["id"] for user in data.get("users", []) if user.get("username") and f"@{user['username'].lower()}" in lowered]
+    return [user["id"] for user in data.get("users", []) if user.get("username") and (not workspace_id or any(m.get("workspaceId") == workspace_id for m in user.get("workspaceMemberships", []))) and f"@{user['username'].lower()}" in lowered]
 
 
 def send_notification_email(recipient: str) -> None:
@@ -338,8 +352,9 @@ def send_notification_email(recipient: str) -> None:
         print(f"E-Mail-Benachrichtigung fehlgeschlagen: {error}")
 
 
-def notify_users(author_id: str, mentions: list[str], notify_all: bool = False) -> None:
+def notify_users(author_id: str, mentions: list[str], notify_all: bool = False, workspace_id: str | None = None) -> None:
     for recipient in data.get("users", []):
+        if workspace_id and not any(m.get("workspaceId") == workspace_id for m in recipient.get("workspaceMemberships", [])): continue
         if recipient["id"] == author_id or not recipient.get("active", True) or recipient.get("accessStatus", "active") != "active": continue
         preference = recipient.get("notificationPreference", "mentions")
         should_notify = recipient["id"] in mentions or notify_all and preference == "all"
@@ -389,6 +404,16 @@ class Handler(SimpleHTTPRequestHandler):
     def public_user(user: dict) -> dict:
         return {key: value for key, value in user.items() if key != "passwordHash"}
 
+    def workspace_context(self, base_user: dict) -> tuple[str, dict, dict]:
+        memberships = base_user.get("workspaceMemberships", [])
+        requested = self.headers.get("X-Workspace-ID", "")
+        membership = next((item for item in memberships if item.get("workspaceId") == requested), None) if requested else (memberships[0] if memberships else None)
+        if not membership: raise PermissionError("Kein Bereich zugeordnet.")
+        workspace = next((item for item in data.get("workspaces", []) if item["id"] == membership["workspaceId"]), None)
+        if not workspace: raise PermissionError("Bereich nicht gefunden.")
+        contextual = {**base_user, "role": membership.get("role", base_user.get("role")), "isAdmin": bool(membership.get("isAdmin")), "permissions": membership.get("permissions", {})}
+        return workspace["id"], workspace, contextual
+
     def api(self, method: str, path: str):
         if path == "/api/health":
             return self.send_json(200, {"ok": True})
@@ -403,11 +428,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(400, {"error": "Der Benutzername ist zu kurz oder bereits vergeben."})
             if len(password) < 8: return self.send_json(400, {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."})
             display_name = clean(str(payload.get("displayName") or invitation.get("displayName") or username)); role = invitation.get("role") or "Assistenz"
-            member = {"id": str(uuid.uuid4()), "name": display_name, "role": role, "email": clean(str(payload.get("email") or invitation.get("email") or "")), "phone": clean(str(payload.get("phone") or "")), "personalWords": clean(str(payload.get("personalWords") or "")), "color": "#285c4d", "createdAt": now()}
+            invitation_workspace_id = invitation.get("workspaceId") or data["workspaces"][0]["id"]
+            member = {"id": str(uuid.uuid4()), "workspaceId": invitation_workspace_id, "name": display_name, "role": role, "email": clean(str(payload.get("email") or invitation.get("email") or "")), "phone": clean(str(payload.get("phone") or "")), "personalWords": clean(str(payload.get("personalWords") or "")), "color": "#285c4d", "createdAt": now()}
             photo_data = str(payload.get("photoData") or "")
             if photo_data: member.update(save_member_photo(photo_data, str(payload.get("photoName") or "Profilfoto")))
             is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
-            created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": full_permissions() if is_admin else invitation.get("permissions", {}), "notificationEmail": member["email"], "notificationPreference": "mentions", "passwordHash": hash_password(password), "createdAt": now()}
+            membership = {"workspaceId": invitation_workspace_id, "role": role, "isAdmin": is_admin, "permissions": full_permissions() if is_admin else invitation.get("permissions", {})}
+            created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": membership["permissions"], "workspaceMemberships": [membership], "notificationEmail": member["email"], "notificationPreference": "mentions", "passwordHash": hash_password(password), "createdAt": now()}
             with lock:
                 data["members"].append(member); data["users"].append(created); invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = created["id"]; save_data(data)
             token_value = secrets.token_urlsafe(32); sessions[token_value] = {"userId": created["id"], "expires": time.time() + 43200}
@@ -428,59 +455,104 @@ class Handler(SimpleHTTPRequestHandler):
             if jar.get("miteinander_session"):
                 sessions.pop(jar["miteinander_session"].value, None)
             return self.send_json(200, {"ok": True}, {"Set-Cookie": "miteinander_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
-        user = self.session_user()
-        if not user:
+        base_user = self.session_user()
+        if not base_user:
             return self.send_json(401, {"error": "Bitte anmelden."})
+        try:
+            workspace_id, workspace, user = self.workspace_context(base_user)
+        except PermissionError as error:
+            return self.send_json(403, {"error": str(error)})
+        if workspace.get("type") == "shared" and (path.startswith("/api/about/") or path.startswith("/api/contacts") or path in {"/api/family", "/api/person-profile", "/api/profile-photo", "/api/contact-options"}):
+            return self.send_json(403, {"error": "Dieser Inhalt gehört in einen persönlichen Bereich."})
         if path == "/api/data" and method == "GET":
             with lock:
                 if ensure_rolling_tasks(data):
                     save_data(data)
+            scoped = lambda key: [item for item in data.get(key, []) if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id]
+            workspace_user_ids = {candidate["id"] for candidate in data["users"] if any(m.get("workspaceId") == workspace_id for m in candidate.get("workspaceMemberships", []))}
+            workspace_member_ids = {candidate.get("memberId") for candidate in data["users"] if candidate["id"] in workspace_user_ids and candidate.get("memberId")}
             visible = {
-                "family": data["family"],
-                "personProfile": data["personProfile"],
-                "goals": data["goals"],
-                "rules": data["rules"],
-                "aboutComments": data["aboutComments"],
-                "importantContacts": data["importantContacts"],
+                "family": {"name": workspace["name"], "person": workspace.get("personName", "")},
+                "workspace": workspace,
+                "workspaces": [space for space in data["workspaces"] if any(m.get("workspaceId") == space["id"] for m in base_user.get("workspaceMemberships", []))],
+                "personProfile": data["personProfile"] if workspace.get("type") == "private" else {},
+                "goals": scoped("goals") if workspace.get("type") == "private" else [],
+                "rules": scoped("rules") if workspace.get("type") == "private" else [],
+                "aboutComments": scoped("aboutComments") if workspace.get("type") == "private" else [],
+                "importantContacts": scoped("importantContacts"),
                 "contactOptions": data["contactOptions"],
-                "beis": data["beis"],
-                "routinePlans": data["routinePlans"] if self.allowed(user, "tasks") else [],
-                "cases": data["cases"] if self.allowed(user, "cases") else [],
-                "correspondence": data["correspondence"] if self.allowed(user, "cases") else [],
-                "tasks": [task for task in data["tasks"] if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
-                "taskOptions": data.get("taskOptions", {"categories": []}) if self.allowed(user, "tasks") else {"categories": []},
-                "documents": data["documents"] if self.allowed(user, "documents") else [],
+                "beis": scoped("beis") if workspace.get("type") == "private" else [],
+                "routinePlans": scoped("routinePlans") if self.allowed(user, "tasks") else [],
+                "cases": scoped("cases") if self.allowed(user, "cases") and workspace.get("type") == "private" else [],
+                "correspondence": scoped("correspondence") if self.allowed(user, "cases") and workspace.get("type") == "private" else [],
+                "tasks": [task for task in scoped("tasks") if user.get("isAdmin") or not task.get("deletedAt")] if self.allowed(user, "tasks") else [],
+                "taskOptions": (data.get("taskOptions", {"categories": []}) if workspace.get("type") == "private" else {"categories": sorted({str(item.get("category", "")).strip() for item in scoped("tasks") if item.get("category")})}) if self.allowed(user, "tasks") else {"categories": []},
+                "documents": scoped("documents") if self.allowed(user, "documents") and workspace.get("type") == "private" else [],
                 "messages": [],
-                "announcements": data.get("announcements", []),
-                "topicComments": [item for item in data.get("topicComments", []) if item.get("targetType") == "goal" or item.get("targetType") == "case" and self.allowed(user, "cases") or item.get("targetType") == "task" and self.allowed(user, "tasks")],
-                "ledger": data["ledger"] if self.allowed(user, "ledger") else [],
-                "accounts": data["accounts"] if self.allowed(user, "ledger") else [],
-                "ledgerOptions": data.get("ledgerOptions", {"descriptions": [], "categories": []}) if self.allowed(user, "ledger") else {"descriptions": [], "categories": []},
-                "members": data["members"],
+                "announcements": scoped("announcements"),
+                "topicComments": [item for item in scoped("topicComments") if item.get("targetType") == "goal" or item.get("targetType") == "case" and self.allowed(user, "cases") or item.get("targetType") == "task" and self.allowed(user, "tasks")],
+                "ledger": scoped("ledger") if self.allowed(user, "ledger") else [],
+                "accounts": scoped("accounts") if self.allowed(user, "ledger") else [],
+                "ledgerOptions": (data.get("ledgerOptions", {"descriptions": [], "categories": []}) if workspace.get("type") == "private" else {"descriptions": sorted({str(item.get("description", "")).strip() for item in scoped("ledger") if item.get("description")}), "categories": sorted({str(item.get("category", "")).strip() for item in scoped("ledger") if item.get("category")})}) if self.allowed(user, "ledger") else {"descriptions": [], "categories": []},
+                "members": scoped("members") if workspace.get("type") == "private" else [member for member in data.get("members", []) if member["id"] in workspace_member_ids],
                 "currentUser": self.public_user(user),
-                "users": [self.public_user(u) for u in data["users"]] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"], "username": u.get("username", "")} for u in data["users"] if u.get("active", True)],
-                "invitations": [{key: value for key, value in item.items() if key != "tokenHash"} for item in data.get("invitations", [])] if user.get("isAdmin") else [],
-                "capabilities": {key: self.allowed(user, key) for key in PERMISSION_KEYS} | {"manageAccess": bool(user.get("isAdmin"))},
+                "users": [self.public_user(u) for u in data["users"] if u["id"] in workspace_user_ids] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"], "username": u.get("username", "")} for u in data["users"] if u["id"] in workspace_user_ids and u.get("active", True)],
+                "invitations": [{key: value for key, value in item.items() if key != "tokenHash"} for item in data.get("invitations", []) if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id] if user.get("isAdmin") else [],
+                "capabilities": {key: self.allowed(user, key) and not (workspace.get("type") == "shared" and key in {"cases", "documents", "family"}) for key in PERMISSION_KEYS} | {"manageAccess": bool(user.get("isAdmin"))},
                 "emailNotificationsConfigured": bool(SMTP_HOST),
             }
             return self.send_json(200, visible)
+        workspace_parts = path.strip("/").split("/")
+        if workspace_parts[:2] == ["api", "workspaces"]:
+            if not user.get("isAdmin"): return self.send_json(403, {"error": "Nur Administrator*innen dürfen Bereiche verwalten."})
+            target_workspace_id = workspace_parts[2] if len(workspace_parts) >= 3 else None
+            action = workspace_parts[3] if len(workspace_parts) == 4 else None
+            if method == "POST" and not target_workspace_id:
+                payload = self.read_json(); name = clean(str(payload.get("name") or ""))
+                if not name: return self.send_json(400, {"error": "Der Bereich benötigt einen Namen."})
+                created_workspace = {"id": str(uuid.uuid4()), "name": name, "type": "shared", "personName": "", "createdAt": now(), "createdByUserId": user["id"]}
+                membership = {"workspaceId": created_workspace["id"], "role": "Bereichsverwaltung", "isAdmin": True, "permissions": full_permissions()}
+                account = {"id": str(uuid.uuid4()), "workspaceId": created_workspace["id"], "name": f"{name} – Gemeinschaftskasse", "type": "Bargeld", "color": "#285c4d", "createdAt": now()}
+                with lock:
+                    data["workspaces"].append(created_workspace); base_user.setdefault("workspaceMemberships", []).append(membership); data["accounts"].append(account)
+                    for target_id in payload.get("memberUserIds", []):
+                        target_user = next((candidate for candidate in data["users"] if candidate["id"] == target_id and candidate["id"] != base_user["id"]), None)
+                        if target_user and not any(m.get("workspaceId") == created_workspace["id"] for m in target_user.get("workspaceMemberships", [])):
+                            target_user.setdefault("workspaceMemberships", []).append({"workspaceId": created_workspace["id"], "role": "WG-Team", "isAdmin": False, "permissions": {"tasks": True, "ledger": True, "cases": False, "documents": False, "family": False}})
+                    save_data(data)
+                return self.send_json(201, created_workspace)
+            target_workspace = next((space for space in data["workspaces"] if space["id"] == target_workspace_id), None)
+            if not target_workspace or target_workspace_id != workspace_id: return self.send_json(404, {"error": "Bereich nicht gefunden."})
+            if action == "memberships" and method == "POST":
+                payload = self.read_json(); target_user = next((candidate for candidate in data["users"] if candidate["id"] == payload.get("userId")), None)
+                if not target_user: return self.send_json(404, {"error": "Person nicht gefunden."})
+                existing = next((m for m in target_user.get("workspaceMemberships", []) if m.get("workspaceId") == workspace_id), None)
+                permissions = {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}; permissions.update({"tasks": True, "ledger": True})
+                values = {"workspaceId": workspace_id, "role": clean(str(payload.get("role") or "Mitglied")), "isAdmin": bool(payload.get("isAdmin")), "permissions": full_permissions() if payload.get("isAdmin") else permissions}
+                if existing: existing.update(values)
+                else: target_user.setdefault("workspaceMemberships", []).append(values)
+                save_data(data); return self.send_json(200, self.public_user(target_user))
+            if action == "memberships" and method == "DELETE":
+                payload = self.read_json(); target_user = next((candidate for candidate in data["users"] if candidate["id"] == payload.get("userId")), None)
+                if not target_user or target_user["id"] == user["id"]: return self.send_json(400, {"error": "Diese Mitgliedschaft kann nicht entfernt werden."})
+                target_user["workspaceMemberships"] = [m for m in target_user.get("workspaceMemberships", []) if m.get("workspaceId") != workspace_id]; save_data(data); return self.send_json(200, {"ok": True})
         if path == "/api/notification-preferences" and method == "PUT":
             payload = self.read_json(); preference = str(payload.get("notificationPreference") or "mentions")
             if preference not in {"all", "mentions", "none"}: return self.send_json(400, {"error": "Ungültige Benachrichtigungseinstellung."})
-            user["notificationPreference"] = preference; user["notificationEmail"] = clean(str(payload.get("notificationEmail") or "")); save_data(data)
-            return self.send_json(200, self.public_user(user))
+            base_user["notificationPreference"] = preference; base_user["notificationEmail"] = clean(str(payload.get("notificationEmail") or "")); save_data(data)
+            return self.send_json(200, self.public_user({**user, "notificationPreference": preference, "notificationEmail": base_user["notificationEmail"]}))
         communication_parts = path.strip("/").split("/")
         if communication_parts[:2] == ["api", "announcements"]:
             announcement_id = communication_parts[2] if len(communication_parts) >= 3 else None
             action = communication_parts[3] if len(communication_parts) == 4 else None
-            announcement = next((item for item in data.get("announcements", []) if item["id"] == announcement_id), None) if announcement_id else None
+            announcement = next((item for item in data.get("announcements", []) if item["id"] == announcement_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), None) if announcement_id else None
             if method == "POST" and not announcement_id:
                 payload = self.read_json(); text = clean(str(payload.get("text") or "")); title = clean(str(payload.get("title") or ""))
                 if not title or not text: return self.send_json(400, {"error": "Überschrift und Information werden benötigt."})
-                mentions = mentioned_user_ids(text)
-                item = {"id": str(uuid.uuid4()), "title": title, "text": text, "importance": payload.get("importance") if payload.get("importance") in {"normal", "important"} else "normal", "validUntil": clean(str(payload.get("validUntil") or "")), "mentionedUserIds": mentions, "readByUserIds": [user["id"]], "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                mentions = mentioned_user_ids(text, workspace_id)
+                item = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "title": title, "text": text, "importance": payload.get("importance") if payload.get("importance") in {"normal", "important"} else "normal", "validUntil": clean(str(payload.get("validUntil") or "")), "mentionedUserIds": mentions, "readByUserIds": [user["id"]], "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
                 with lock: data.setdefault("announcements", []).insert(0, item); save_data(data)
-                notify_users(user["id"], mentions, notify_all=True); return self.send_json(201, item)
+                notify_users(user["id"], mentions, notify_all=True, workspace_id=workspace_id); return self.send_json(201, item)
             if not announcement: return self.send_json(404, {"error": "Information nicht gefunden."})
             if method == "PUT" and action == "read":
                 if user["id"] not in announcement.setdefault("readByUserIds", []): announcement["readByUserIds"].append(user["id"]); save_data(data)
@@ -495,12 +567,12 @@ class Handler(SimpleHTTPRequestHandler):
                 collection = {"case": "cases", "task": "tasks", "goal": "goals"}.get(target_type)
                 permission = {"case": "cases", "task": "tasks", "goal": None}.get(target_type)
                 if not text: return self.send_json(400, {"error": "Der Beitrag darf nicht leer sein."})
-                if not collection or not any(item["id"] == target_id for item in data.get(collection, [])): return self.send_json(400, {"error": "Das zugehörige Thema wurde nicht gefunden."})
+                if not collection or not any(item["id"] == target_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id for item in data.get(collection, [])): return self.send_json(400, {"error": "Das zugehörige Thema wurde nicht gefunden."})
                 if permission and not self.allowed(user, permission): return self.send_json(403, {"error": "Keine Berechtigung für dieses Thema."})
-                mentions = mentioned_user_ids(text); comment = {"id": str(uuid.uuid4()), "targetType": target_type, "targetId": target_id, "text": text, "mentionedUserIds": mentions, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                mentions = mentioned_user_ids(text, workspace_id); comment = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "targetType": target_type, "targetId": target_id, "text": text, "mentionedUserIds": mentions, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
                 with lock: data.setdefault("topicComments", []).append(comment); save_data(data)
-                notify_users(user["id"], mentions); return self.send_json(201, comment)
-            comment = next((item for item in data.get("topicComments", []) if item["id"] == comment_id), None)
+                notify_users(user["id"], mentions, workspace_id=workspace_id); return self.send_json(201, comment)
+            comment = next((item for item in data.get("topicComments", []) if item["id"] == comment_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), None)
             if not comment: return self.send_json(404, {"error": "Beitrag nicht gefunden."})
             if method == "DELETE":
                 if not (user.get("isAdmin") or comment.get("createdByUserId") == user["id"]): return self.send_json(403, {"error": "Du kannst diesen Beitrag nicht löschen."})
@@ -512,6 +584,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not filename or filename != Path(filename).name:
                 return self.send_json(404, {"error": "Beleg nicht gefunden."})
             receipt = RECEIPTS_DIR / filename
+            if not any(item.get("receiptFile") == filename and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id for item in data.get("ledger", [])):
+                return self.send_json(404, {"error": "Beleg nicht gefunden."})
             if not receipt.is_file():
                 return self.send_json(404, {"error": "Beleg nicht gefunden."})
             content = receipt.read_bytes()
@@ -583,6 +657,7 @@ class Handler(SimpleHTTPRequestHandler):
             filename = path.rsplit("/", 1)[-1]
             if not filename or filename != Path(filename).name: return self.send_json(404, {"error": "Datei nicht gefunden."})
             attachment = ROUTINE_FILES_DIR / filename
+            if not any(item.get("attachmentFile") == filename and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id for item in data.get("routinePlans", [])): return self.send_json(404, {"error": "Datei nicht gefunden."})
             if not attachment.is_file(): return self.send_json(404, {"error": "Datei nicht gefunden."})
             content = attachment.read_bytes(); self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
@@ -593,6 +668,8 @@ class Handler(SimpleHTTPRequestHandler):
             filename = path.rsplit("/", 1)[-1]
             if not filename or filename != Path(filename).name: return self.send_json(404, {"error": "Foto nicht gefunden."})
             attachment = MEMBER_FILES_DIR / filename
+            if not any(member.get("photoFile") == filename and (member.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id or any(candidate.get("memberId") == member.get("id") and any(m.get("workspaceId") == workspace_id for m in candidate.get("workspaceMemberships", [])) for candidate in data.get("users", []))) for member in data.get("members", [])):
+                return self.send_json(404, {"error": "Foto nicht gefunden."})
             if not attachment.is_file(): return self.send_json(404, {"error": "Foto nicht gefunden."})
             content = attachment.read_bytes(); self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
@@ -602,7 +679,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not user.get("isAdmin"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
             with lock:
-                data["family"].update(clean(self.read_json()))
+                values = clean(self.read_json()); data["family"].update(values)
+                workspace["name"] = values.get("name") or workspace["name"]; workspace["personName"] = values.get("person") or workspace.get("personName", "")
                 data["family"]["updatedAt"] = now()
                 save_data(data)
             return self.send_json(200, data["family"])
@@ -779,7 +857,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(403, {"error": "Keine Berechtigung für Ablaufpläne."})
             plan_id = routine_parts[2] if len(routine_parts) >= 3 else None
             action = routine_parts[3] if len(routine_parts) == 4 else None
-            plan = next((item for item in data["routinePlans"] if item["id"] == plan_id), None) if plan_id else None
+            plan = next((item for item in data["routinePlans"] if item["id"] == plan_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), None) if plan_id else None
             if action == "review" and method == "PUT":
                 if not user.get("isAdmin"): return self.send_json(403, {"error": "Ablaufpläne dürfen nur von Administratoren freigegeben werden."})
                 if not plan: return self.send_json(404, {"error": "Ablaufplan nicht gefunden."})
@@ -788,22 +866,22 @@ class Handler(SimpleHTTPRequestHandler):
                 with lock:
                     if decision == "approved":
                         for other in data["routinePlans"]:
-                            if other.get("seriesId") == plan.get("seriesId") and other.get("approvalStatus") == "approved": other["approvalStatus"] = "superseded"
+                            if other.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id and other.get("seriesId") == plan.get("seriesId") and other.get("approvalStatus") == "approved": other["approvalStatus"] = "superseded"
                     plan["approvalStatus"] = decision; plan["reviewedAt"] = now(); plan["reviewedByName"] = user["displayName"]
                     save_data(data)
                 return self.send_json(200, plan)
             if method == "POST" and not plan_id:
                 payload = self.read_json(); file_data = str(payload.pop("planFile", "")); file_name = str(payload.pop("planFileName", "Ablaufplan"))
-                plan = {"id": str(uuid.uuid4()), "seriesId": str(uuid.uuid4()), "version": 1, **clean(payload), "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                plan = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "seriesId": str(uuid.uuid4()), "version": 1, **clean(payload), "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
                 if file_data: plan.update(save_routine_file(file_data, file_name))
                 with lock: data["routinePlans"].insert(0, plan); save_data(data)
                 return self.send_json(201, plan)
             if not plan: return self.send_json(404, {"error": "Ablaufplan nicht gefunden."})
             if method == "PUT" and not action:
                 payload = self.read_json(); file_data = str(payload.pop("planFile", "")); file_name = str(payload.pop("planFileName", "Ablaufplan"))
-                version = max((item.get("version", 1) for item in data["routinePlans"] if item.get("seriesId") == plan.get("seriesId")), default=0) + 1
+                version = max((item.get("version", 1) for item in data["routinePlans"] if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id and item.get("seriesId") == plan.get("seriesId")), default=0) + 1
                 inherited = {key: plan.get(key) for key in ("attachmentFile", "attachmentName", "attachmentType") if plan.get(key)}
-                revision = {"id": str(uuid.uuid4()), "seriesId": plan["seriesId"], "version": version, **clean(payload), **inherited, "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "basedOnId": plan["id"]}
+                revision = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "seriesId": plan["seriesId"], "version": version, **clean(payload), **inherited, "approvalStatus": "pending", "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "basedOnId": plan["id"]}
                 if file_data: revision.update(save_routine_file(file_data, file_name))
                 with lock: data["routinePlans"].insert(0, revision); save_data(data)
                 return self.send_json(201, revision)
@@ -826,7 +904,7 @@ class Handler(SimpleHTTPRequestHandler):
                 days = max(1, min(30, int(payload.get("validDays") or 7)))
                 expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + days * 86400))
                 is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
-                invitation = {"id": str(uuid.uuid4()), "tokenHash": hashlib.sha256(token.encode()).hexdigest(), "displayName": clean(str(payload.get("displayName") or "")), "email": clean(str(payload.get("email") or "")), "role": role, "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}, "expiresAt": expires, "createdAt": now(), "createdByName": user["displayName"]}
+                invitation = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "tokenHash": hashlib.sha256(token.encode()).hexdigest(), "displayName": clean(str(payload.get("displayName") or "")), "email": clean(str(payload.get("email") or "")), "role": role, "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}, "expiresAt": expires, "createdAt": now(), "createdByName": user["displayName"]}
                 with lock: data.setdefault("invitations", []).insert(0, invitation); save_data(data)
                 return self.send_json(201, {**{key: value for key, value in invitation.items() if key != "tokenHash"}, "token": token})
             invitation = next((item for item in data.get("invitations", []) if item["id"] == invitation_id), None)
@@ -857,6 +935,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS},
                     "passwordHash": hash_password(password), "createdAt": now(),
                 }
+                created["workspaceMemberships"] = [{"workspaceId": workspace_id, "role": role, "isAdmin": is_admin, "permissions": created["permissions"]}]
                 with lock: data["users"].append(created); save_data(data)
                 return self.send_json(201, self.public_user(created))
             target = next((u for u in data["users"] if u["id"] == target_id), None)
@@ -886,6 +965,8 @@ class Handler(SimpleHTTPRequestHandler):
         if len(parts) not in (2, 3) or parts[0] != "api" or parts[1] not in COLLECTIONS:
             return self.send_json(404, {"error": "Nicht gefunden."})
         collection = parts[1]
+        if workspace.get("type") == "shared" and collection in {"cases", "correspondence", "documents"}:
+            return self.send_json(403, {"error": "Dieser Inhalt gehört in einen persönlichen Bereich."})
         permission = {"cases":"cases", "correspondence":"cases", "tasks":"tasks", "documents":"documents", "ledger":"ledger", "accounts":"family", "members":"family", "messages":"tasks"}[collection]
         if not self.allowed(user, permission):
             return self.send_json(403, {"error": "Keine Berechtigung für diesen Bereich."})
@@ -913,7 +994,7 @@ class Handler(SimpleHTTPRequestHandler):
                     series_id = str(uuid.uuid4()) if recurrence != "once" else None
                     created = []
                     for occurrence_due in dates or [due]:
-                        occurrence = {"id": str(uuid.uuid4()), **clean(payload), "due": occurrence_due, "recurrenceSeriesId": series_id, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "history": []}
+                        occurrence = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, **clean(payload), "due": occurrence_due, "recurrenceSeriesId": series_id, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"], "history": []}
                         created.append(occurrence)
                     category = clean(str(payload.get("category") or ""))
                     choices = data.setdefault("taskOptions", {}).setdefault("categories", [])
@@ -928,7 +1009,7 @@ class Handler(SimpleHTTPRequestHandler):
                 document_file_name = payload.pop("documentFileName", "Dokument") if collection == "documents" else "Dokument"
                 member_photo = payload.pop("photoData", None) if collection == "members" else None
                 member_photo_name = payload.pop("photoName", "Profilfoto") if collection == "members" else "Profilfoto"
-                item = {"id": str(uuid.uuid4()), **clean(payload), "createdAt": now()}
+                item = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, **clean(payload), "createdAt": now()}
                 item["createdByUserId"] = user["id"]
                 item["createdByName"] = user["displayName"]
                 if receipt_image:
@@ -950,7 +1031,7 @@ class Handler(SimpleHTTPRequestHandler):
                 data[collection].insert(0, item)
                 save_data(data)
                 return self.send_json(201, item)
-            index = next((i for i, item in enumerate(data[collection]) if item["id"] == item_id), -1)
+            index = next((i for i, item in enumerate(data[collection]) if item["id"] == item_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), -1)
             if index < 0:
                 return self.send_json(404, {"error": "Eintrag nicht gefunden."})
             if method == "PUT":

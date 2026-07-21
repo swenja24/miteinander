@@ -50,6 +50,19 @@
 .copy-link { display: flex; gap: 8px; }
 .copy-link input { min-width: 0; }
 .user-card .secondary { padding: 8px 10px; }
+.workspace-picker {
+  display: block;
+  color: var(--muted);
+  font-size: .72rem;
+  margin: -18px 10px 24px;
+}
+.workspace-picker select {
+  font-size: .84rem;
+  margin-top: 6px;
+  padding: 9px 10px;
+}
+.workspace-management { margin-top: 28px; }
+.workspace-management h3 { margin: 12px 0 18px; }
 @media (max-width: 600px) {
   .copy-link,
   .invitation-card { align-items: stretch; flex-direction: column; }

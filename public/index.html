@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f7f5ef">
   <title>Miteinander – Eingliederungshilfe organisieren</title>
-  <link rel="stylesheet" href="/fonts/fonts.css?v=20260721-2">
-  <link rel="stylesheet" href="/styles.css?v=20260721-2">
-  <link rel="stylesheet" href="/ledger.css?v=20260721-2">
-  <link rel="stylesheet" href="/team.css?v=20260721-2">
-  <link rel="stylesheet" href="/communication.css?v=20260721-2">
+  <link rel="stylesheet" href="/fonts/fonts.css?v=20260721-3">
+  <link rel="stylesheet" href="/styles.css?v=20260721-3">
+  <link rel="stylesheet" href="/ledger.css?v=20260721-3">
+  <link rel="stylesheet" href="/team.css?v=20260721-3">
+  <link rel="stylesheet" href="/communication.css?v=20260721-3">
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -49,6 +49,7 @@
   <div id="app" class="app-shell hidden">
     <aside class="sidebar">
       <a href="#dashboard" class="logo" aria-label="Miteinander Startseite"><span>M</span><strong>Miteinander</strong></a>
+      <label class="workspace-picker">Aktiver Bereich<select id="workspace-select" aria-label="Aktiven Bereich wählen"></select></label>
       <nav aria-label="Hauptnavigation">
         <a href="#dashboard" data-page="dashboard"><span>⌂</span> Überblick</a>
         <a href="#about" data-page="about"><span>♡</span> Über Linea</a>
@@ -69,6 +70,6 @@
 
   <dialog id="modal"><div class="modal-card"><button class="modal-close" type="button" aria-label="Schließen">×</button><div id="modal-content"></div></div></dialog>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/app.js?v=20260721-2"></script>
+  <script type="module" src="/app.js?v=20260721-3"></script>
 </body>
 </html>

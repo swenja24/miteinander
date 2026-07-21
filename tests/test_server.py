@@ -27,11 +27,12 @@ class ServerTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.process.terminate(); cls.process.wait(timeout=5); cls.temp.cleanup()
 
-    def call(self, path, method="GET", body=None, cookie=None):
+    def call(self, path, method="GET", body=None, cookie=None, workspace_id=None):
         request = urllib.request.Request("http://127.0.0.1:8765" + path, method=method)
         if body is not None:
             request.data = json.dumps(body).encode(); request.add_header("Content-Type", "application/json")
         if cookie: request.add_header("Cookie", cookie)
+        if workspace_id: request.add_header("X-Workspace-ID", workspace_id)
         response = urllib.request.urlopen(request)
         return response, json.loads(response.read())
 
@@ -50,8 +51,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260721-2', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-2") as response:
+            self.assertIn('/app.js?v=20260721-3', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-3") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -487,6 +488,44 @@ class ServerTest(unittest.TestCase):
         _, visible = self.call("/api/data", cookie=helper_cookie)
         self.assertIn(comment["id"], [item["id"] for item in visible["topicComments"]])
         self.assertNotIn("case", [item["targetType"] for item in visible["topicComments"]])
+
+    def test_shared_workspace_separates_tasks_cash_and_memberships(self):
+        admin_cookie = self.login()
+        _, helper = self.call("/api/users", "POST", {
+            "username": "wg-assistenz", "displayName": "WG Assistenz", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {"tasks": True, "ledger": True},
+        }, admin_cookie)
+        _, private_before = self.call("/api/data", cookie=admin_cookie)
+        _, shared = self.call("/api/workspaces", "POST", {
+            "name": "WG Sonnenstraße", "memberUserIds": [helper["id"]],
+        }, admin_cookie)
+        _, shared_data = self.call("/api/data", cookie=admin_cookie, workspace_id=shared["id"])
+        self.assertEqual(shared_data["workspace"]["type"], "shared")
+        self.assertEqual(shared_data["cases"], [])
+        self.assertEqual(shared_data["documents"], [])
+        self.assertEqual(len(shared_data["accounts"]), 1)
+        _, shared_task = self.call("/api/tasks", "POST", {
+            "title": "Gemeinsamer Einkauf", "status": "open",
+        }, admin_cookie, shared["id"])
+        _, shared_entry = self.call("/api/ledger", "POST", {
+            "description": "WG-Einkauf", "amount": "20.00", "type": "expense",
+            "accountId": shared_data["accounts"][0]["id"], "receiptStatus": "none",
+        }, admin_cookie, shared["id"])
+        _, private_after = self.call("/api/data", cookie=admin_cookie, workspace_id=private_before["workspace"]["id"])
+        self.assertNotIn(shared_task["id"], [item["id"] for item in private_after["tasks"]])
+        self.assertNotIn(shared_entry["id"], [item["id"] for item in private_after["ledger"]])
+        helper_cookie = self.login("wg-assistenz", "sicheres-passwort")
+        _, helper_shared = self.call("/api/data", cookie=helper_cookie, workspace_id=shared["id"])
+        self.assertIn(shared_task["id"], [item["id"] for item in helper_shared["tasks"]])
+        self.assertIn(shared_entry["id"], [item["id"] for item in helper_shared["ledger"]])
+        _, outsider = self.call("/api/users", "POST", {
+            "username": "wg-aussen", "displayName": "Außenstehend", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {},
+        }, admin_cookie)
+        outsider_cookie = self.login("wg-aussen", "sicheres-passwort")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/data", cookie=outsider_cookie, workspace_id=shared["id"])
+        self.assertEqual(error.exception.code, 403)
 
 
 if __name__ == "__main__": unittest.main()
