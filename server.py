@@ -52,25 +52,23 @@ def now() -> str:
 
 
 def empty_data() -> dict:
-    cash_id, savings_id, shared_id, bank_id = (str(uuid.uuid4()) for _ in range(4))
+    cash_id, savings_id, bank_id = (str(uuid.uuid4()) for _ in range(3))
     return {
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
         "announcements": [], "topicComments": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [], "auditLog": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
         "taskOptions": {"categories": []},
         "accounts": [
             {"id": cash_id, "name": "Lineas Barkasse", "type": "Bargeld", "color": "#285c4d"},
             {"id": savings_id, "name": "Lineas Bargeld-Spardose", "type": "Bargeld", "color": "#5b57c8"},
-            {"id": shared_id, "name": "Gemeinsame WG-Barkasse", "type": "Bargeld", "color": "#d86f3f"},
             {"id": bank_id, "name": "Wohnungs- und Einkommenskonto", "type": "Bankkonto", "color": "#397a92"},
         ],
         "members": [
             {"id": str(uuid.uuid4()), "name": "Linea", "role": "Leistungsberechtigte Person", "color": "#5a57d9"},
-            {"id": str(uuid.uuid4()), "name": "Familie", "role": "Angehörige", "color": "#e57d45"},
         ],
     }
 
@@ -111,7 +109,7 @@ def load_data() -> dict:
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
         "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
-        "announcements": [], "topicComments": [],
+        "announcements": [], "topicComments": [], "auditLog": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
@@ -168,6 +166,20 @@ def load_data() -> dict:
         if not existing_user.get("workspaceMemberships"):
             existing_user["workspaceMemberships"] = [{"workspaceId": default_workspace_id, "role": existing_user.get("role", "Assistenz"), "isAdmin": bool(existing_user.get("isAdmin")), "permissions": existing_user.get("permissions", {})}]
             changed = True
+    migrations = loaded.setdefault("schemaMigrations", [])
+    if "remove-shared-private-placeholders-v1" not in migrations:
+        shared_account = next((account for account in loaded.get("accounts", []) if account.get("name") == "Gemeinsame WG-Barkasse" and account.get("workspaceId", default_workspace_id) == default_workspace_id), None)
+        if shared_account:
+            if any(entry.get("accountId") == shared_account["id"] for entry in loaded.get("ledger", [])):
+                shared_account["name"] = "Bisherige WG-Barkasse (bitte zuordnen)"
+            else:
+                loaded["accounts"].remove(shared_account)
+        placeholder = next((member for member in loaded.get("members", []) if member.get("name") == "Familie" and member.get("role") == "Angehörige"), None)
+        if placeholder:
+            referenced = any(user.get("memberId") == placeholder["id"] for user in loaded.get("users", [])) or any(task.get("assignee") == placeholder["id"] for task in loaded.get("tasks", []))
+            if referenced: placeholder["name"] = "Angehörige Person (bitte benennen)"
+            else: loaded["members"].remove(placeholder)
+        migrations.append("remove-shared-private-placeholders-v1"); changed = True
     if changed or not DATA_FILE.exists():
         save_data(loaded)
     return loaded
@@ -246,6 +258,11 @@ def clean(value):
     if isinstance(value, list):
         return [clean(v) for v in value[:1000]]
     return value
+
+
+def audit(workspace_id: str, user: dict, action: str, entity: str, entity_id: str = "", summary: str = "") -> None:
+    data.setdefault("auditLog", []).insert(0, {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "action": action, "entity": entity, "entityId": entity_id, "summary": clean(summary), "at": now(), "byUserId": user["id"], "byName": user["displayName"]})
+    del data["auditLog"][2000:]
 
 
 def recurring_dates(start_value: str, recurrence: str, until_value: str | None) -> list[str]:
@@ -500,8 +517,15 @@ class Handler(SimpleHTTPRequestHandler):
                 "invitations": [{key: value for key, value in item.items() if key != "tokenHash"} for item in data.get("invitations", []) if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id] if user.get("isAdmin") else [],
                 "capabilities": {key: self.allowed(user, key) and not (workspace.get("type") == "shared" and key in {"cases", "documents", "family"}) for key in PERMISSION_KEYS} | {"manageAccess": bool(user.get("isAdmin"))},
                 "emailNotificationsConfigured": bool(SMTP_HOST),
+                "auditLog": [item for item in data.get("auditLog", []) if item.get("workspaceId") == workspace_id][:100] if user.get("isAdmin") else [],
+                "onboardingDismissed": workspace_id in base_user.get("onboardingDismissedWorkspaceIds", []),
+                "operatorInfo": {"name": os.getenv("DATA_CONTROLLER_NAME", ""), "contact": os.getenv("DATA_CONTROLLER_CONTACT", "")},
             }
             return self.send_json(200, visible)
+        if path == "/api/onboarding" and method == "PUT":
+            dismissed = base_user.setdefault("onboardingDismissedWorkspaceIds", [])
+            if workspace_id not in dismissed: dismissed.append(workspace_id)
+            save_data(data); return self.send_json(200, {"ok": True})
         workspace_parts = path.strip("/").split("/")
         if workspace_parts[:2] == ["api", "workspaces"]:
             if not user.get("isAdmin"): return self.send_json(403, {"error": "Nur Administrator*innen dürfen Bereiche verwalten."})
@@ -519,7 +543,7 @@ class Handler(SimpleHTTPRequestHandler):
                         target_user = next((candidate for candidate in data["users"] if candidate["id"] == target_id and candidate["id"] != base_user["id"]), None)
                         if target_user and not any(m.get("workspaceId") == created_workspace["id"] for m in target_user.get("workspaceMemberships", [])):
                             target_user.setdefault("workspaceMemberships", []).append({"workspaceId": created_workspace["id"], "role": "WG-Team", "isAdmin": False, "permissions": {"tasks": True, "ledger": True, "cases": False, "documents": False, "family": False}})
-                    save_data(data)
+                    audit(created_workspace["id"], user, "created", "workspace", created_workspace["id"], f"Gemeinsamen Bereich „{name}“ angelegt"); save_data(data)
                 return self.send_json(201, created_workspace)
             target_workspace = next((space for space in data["workspaces"] if space["id"] == target_workspace_id), None)
             if not target_workspace or target_workspace_id != workspace_id: return self.send_json(404, {"error": "Bereich nicht gefunden."})
@@ -531,11 +555,11 @@ class Handler(SimpleHTTPRequestHandler):
                 values = {"workspaceId": workspace_id, "role": clean(str(payload.get("role") or "Mitglied")), "isAdmin": bool(payload.get("isAdmin")), "permissions": full_permissions() if payload.get("isAdmin") else permissions}
                 if existing: existing.update(values)
                 else: target_user.setdefault("workspaceMemberships", []).append(values)
-                save_data(data); return self.send_json(200, self.public_user(target_user))
+                audit(workspace_id, user, "updated", "workspace-membership", target_user["id"], f"Mitgliedschaft für {target_user['displayName']} geändert"); save_data(data); return self.send_json(200, self.public_user(target_user))
             if action == "memberships" and method == "DELETE":
                 payload = self.read_json(); target_user = next((candidate for candidate in data["users"] if candidate["id"] == payload.get("userId")), None)
                 if not target_user or target_user["id"] == user["id"]: return self.send_json(400, {"error": "Diese Mitgliedschaft kann nicht entfernt werden."})
-                target_user["workspaceMemberships"] = [m for m in target_user.get("workspaceMemberships", []) if m.get("workspaceId") != workspace_id]; save_data(data); return self.send_json(200, {"ok": True})
+                target_user["workspaceMemberships"] = [m for m in target_user.get("workspaceMemberships", []) if m.get("workspaceId") != workspace_id]; audit(workspace_id, user, "deleted", "workspace-membership", target_user["id"], f"Mitgliedschaft von {target_user['displayName']} entfernt"); save_data(data); return self.send_json(200, {"ok": True})
         if path == "/api/notification-preferences" and method == "PUT":
             payload = self.read_json(); preference = str(payload.get("notificationPreference") or "mentions")
             if preference not in {"all", "mentions", "none"}: return self.send_json(400, {"error": "Ungültige Benachrichtigungseinstellung."})
@@ -682,6 +706,7 @@ class Handler(SimpleHTTPRequestHandler):
                 values = clean(self.read_json()); data["family"].update(values)
                 workspace["name"] = values.get("name") or workspace["name"]; workspace["personName"] = values.get("person") or workspace.get("personName", "")
                 data["family"]["updatedAt"] = now()
+                audit(workspace_id, user, "updated", "workspace-settings", workspace_id, "Grunddaten des Bereichs geändert")
                 save_data(data)
             return self.send_json(200, data["family"])
 
@@ -905,12 +930,12 @@ class Handler(SimpleHTTPRequestHandler):
                 expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + days * 86400))
                 is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
                 invitation = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, "tokenHash": hashlib.sha256(token.encode()).hexdigest(), "displayName": clean(str(payload.get("displayName") or "")), "email": clean(str(payload.get("email") or "")), "role": role, "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS}, "expiresAt": expires, "createdAt": now(), "createdByName": user["displayName"]}
-                with lock: data.setdefault("invitations", []).insert(0, invitation); save_data(data)
+                with lock: data.setdefault("invitations", []).insert(0, invitation); audit(workspace_id, user, "created", "invitation", invitation["id"], f"Einladung für {invitation['displayName'] or invitation['email']} erstellt"); save_data(data)
                 return self.send_json(201, {**{key: value for key, value in invitation.items() if key != "tokenHash"}, "token": token})
             invitation = next((item for item in data.get("invitations", []) if item["id"] == invitation_id), None)
             if not invitation: return self.send_json(404, {"error": "Einladung nicht gefunden."})
             if method == "DELETE":
-                invitation["revokedAt"] = now(); invitation["revokedByName"] = user["displayName"]; save_data(data); return self.send_json(200, {"ok": True})
+                invitation["revokedAt"] = now(); invitation["revokedByName"] = user["displayName"]; audit(workspace_id, user, "revoked", "invitation", invitation["id"], "Einladung widerrufen"); save_data(data); return self.send_json(200, {"ok": True})
             return self.send_json(405, {"error": "Methode nicht erlaubt."})
         if len(user_parts) in (2, 3) and user_parts[:2] == ["api", "users"]:
             if not user.get("isAdmin"):
@@ -937,6 +962,7 @@ class Handler(SimpleHTTPRequestHandler):
                 }
                 created["workspaceMemberships"] = [{"workspaceId": workspace_id, "role": role, "isAdmin": is_admin, "permissions": created["permissions"]}]
                 with lock: data["users"].append(created); save_data(data)
+                audit(workspace_id, user, "created", "user", created["id"], f"Zugang für {created['displayName']} angelegt"); save_data(data)
                 return self.send_json(201, self.public_user(created))
             target = next((u for u in data["users"] if u["id"] == target_id), None)
             if not target: return self.send_json(404, {"error": "Zugang nicht gefunden."})
@@ -950,7 +976,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if payload.get("password"):
                     if len(str(payload["password"])) < 8: return self.send_json(400, {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."})
                     target["passwordHash"] = hash_password(str(payload["password"]))
-                with lock: save_data(data)
+                audit(workspace_id, user, "updated", "user", target["id"], f"Zugang von {target['displayName']} geändert"); save_data(data)
                 return self.send_json(200, self.public_user(target))
             if method == "DELETE":
                 if target["id"] == user["id"]: return self.send_json(400, {"error": "Du kannst deinen eigenen Zugang nicht löschen."})
@@ -958,7 +984,7 @@ class Handler(SimpleHTTPRequestHandler):
                     target["active"] = False; target["accessStatus"] = "deactivated"
                     for token, session in list(sessions.items()):
                         if session["userId"] == target["id"]: sessions.pop(token, None)
-                    save_data(data)
+                    audit(workspace_id, user, "deactivated", "user", target["id"], f"Zugang von {target['displayName']} deaktiviert"); save_data(data)
                 return self.send_json(200, {"ok": True})
 
         parts = path.strip("/").split("/")
@@ -1000,6 +1026,7 @@ class Handler(SimpleHTTPRequestHandler):
                     choices = data.setdefault("taskOptions", {}).setdefault("categories", [])
                     if category and category not in choices: choices.append(category)
                     data["tasks"][0:0] = created
+                    audit(workspace_id, user, "created", "tasks", created[0]["id"], f"Aufgabe „{created[0].get('title', '')}“ angelegt")
                     save_data(data)
                     return self.send_json(201, created[0])
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
@@ -1029,6 +1056,7 @@ class Handler(SimpleHTTPRequestHandler):
                         choices = data.setdefault("ledgerOptions", {}).setdefault(key, [])
                         if value and value not in choices: choices.append(value)
                 data[collection].insert(0, item)
+                audit(workspace_id, user, "created", collection, item["id"], f"{collection}: {item.get('title') or item.get('description') or item.get('name') or 'Eintrag'}")
                 save_data(data)
                 return self.send_json(201, item)
             index = next((i for i, item in enumerate(data[collection]) if item["id"] == item_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), -1)
@@ -1089,6 +1117,7 @@ class Handler(SimpleHTTPRequestHandler):
                         choices = data.setdefault("ledgerOptions", {}).setdefault(key, [])
                         if value and value not in choices: choices.append(value)
                 data[collection][index]["updatedAt"] = now()
+                audit(workspace_id, user, "updated", collection, data[collection][index]["id"], f"{collection}: Eintrag geändert")
                 save_data(data)
                 return self.send_json(200, data[collection][index])
             if method == "DELETE":
@@ -1097,6 +1126,7 @@ class Handler(SimpleHTTPRequestHandler):
                     task["deletedAt"] = now()
                     task["deletedByUserId"] = user["id"]
                     task["deletedByName"] = user["displayName"]
+                    audit(workspace_id, user, "delete-requested", "tasks", task["id"], f"Löschung von „{task.get('title', '')}“ vorgemerkt")
                     save_data(data)
                     return self.send_json(200, {"ok": True, "pendingAdminConfirmation": True})
                 removed = data[collection].pop(index)
@@ -1108,6 +1138,7 @@ class Handler(SimpleHTTPRequestHandler):
                     (DOCUMENT_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
                 if collection == "members" and removed.get("photoFile"):
                     (MEMBER_FILES_DIR / Path(removed["photoFile"]).name).unlink(missing_ok=True)
+                audit(workspace_id, user, "deleted", collection, removed["id"], f"{collection}: {removed.get('title') or removed.get('description') or removed.get('name') or 'Eintrag'} gelöscht")
                 save_data(data)
                 return self.send_json(200, {"ok": True})
         return self.send_json(405, {"error": "Methode nicht erlaubt."})

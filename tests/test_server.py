@@ -51,8 +51,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260721-3', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-3") as response:
+            self.assertIn('/app.js?v=20260721-4', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-4") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -64,6 +64,17 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(self.temp.name, "familie.json"), encoding="utf-8") as file:
             stored = json.loads(file.read())
         self.assertEqual(stored["tasks"][0]["title"], "Bescheid prüfen")
+
+    def test_onboarding_and_admin_audit_log(self):
+        cookie = self.login()
+        _, initial = self.call("/api/data", cookie=cookie)
+        self.assertFalse(initial["onboardingDismissed"])
+        self.call("/api/onboarding", "PUT", {}, cookie)
+        self.call("/api/tasks", "POST", {"title": "Protokollierte Aufgabe", "status": "open"}, cookie)
+        _, current = self.call("/api/data", cookie=cookie)
+        self.assertTrue(current["onboardingDismissed"])
+        self.assertTrue(any(entry["entity"] == "tasks" for entry in current["auditLog"]))
+        self.assertIn("operatorInfo", current)
 
     def test_important_contacts_are_shared_but_safely_editable(self):
         admin_cookie = self.login()
@@ -251,7 +262,9 @@ class ServerTest(unittest.TestCase):
     def test_accounts_and_protected_receipt_upload(self):
         cookie = self.login()
         _, initial = self.call("/api/data", cookie=cookie)
-        self.assertEqual(len(initial["accounts"]), 4)
+        self.assertEqual(len(initial["accounts"]), 3)
+        self.assertNotIn("Gemeinsame WG-Barkasse", [account["name"] for account in initial["accounts"]])
+        self.assertNotIn("Familie", [member["name"] for member in initial["members"]])
         png = base64.b64encode(
             b"\x89PNG\r\n\x1a\n" + b"test-receipt"
         ).decode()

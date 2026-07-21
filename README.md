@@ -65,6 +65,8 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 
 Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen. `APP_BASE_URL` ist die öffentliche HTTPS-Adresse der Anwendung. Die E-Mail enthält bewusst weder Nachrichtentext noch Gesundheitsdaten, sondern nur den Hinweis, dass in Miteinander eine neue Information vorliegt. Ohne SMTP-Konfiguration funktionieren Infobrett, Erwähnungen und Lesebestätigungen weiterhin; lediglich der externe E-Mail-Versand bleibt aus.
 
+Unter „Hilfe & Datenschutz“ nennt die App die verantwortliche Stelle der jeweiligen Installation. Dafür in Arcane `DATA_CONTROLLER_NAME` und `DATA_CONTROLLER_CONTACT` setzen. Der persistente Docker-Datenträger `/app/data` muss regelmäßig verschlüsselt gesichert werden; eine Wiederherstellung sollte vor dem Praxiseinsatz getestet werden.
+
 ## Backup und Wiederherstellung
 
 Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files`, hochgeladene Dokumente unter `/app/data/document-files`, Profilfoto sowie BEIs unter `/app/data/about-files` und Anhänge von Ablaufplänen unter `/app/data/routine-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
