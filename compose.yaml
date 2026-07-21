@@ -8,6 +8,13 @@ services:
       - "3080:3000"
     environment:
       APP_PASSWORD: "${APP_PASSWORD:?APP_PASSWORD muss in .env gesetzt sein}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_TLS: "${SMTP_TLS:-true}"
       TZ: "Europe/Berlin"
     volumes:
       - miteinander_data:/app/data

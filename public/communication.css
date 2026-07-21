@@ -1,0 +1,33 @@
+.announcement-section { margin-bottom: 28px; }
+.announcement-list { display: grid; gap: 14px; }
+.announcement h3 { margin: 8px 0 0; }
+.announcement > p { line-height: 1.55; }
+.announcement > small { color: var(--muted); }
+.announcement-important { border-left: 5px solid var(--orange); }
+.announcement-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 14px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.topic-thread {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.topic-thread summary {
+  color: var(--green);
+  cursor: pointer;
+  font-weight: 750;
+}
+.topic-thread .about-comments { margin-top: 14px; }
+.task-list .topic-thread { grid-row: auto; }
+@media (max-width: 600px) {
+  .announcement-footer { align-items: stretch; flex-direction: column; }
+}

@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260721-1', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-1") as response:
+            self.assertIn('/app.js?v=20260721-2', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -443,6 +443,50 @@ class ServerTest(unittest.TestCase):
         })
         self.assertTrue(accepted["user"]["isAdmin"])
         self.assertTrue(all(accepted["user"]["permissions"].values()))
+
+    def test_infoboard_mentions_read_receipts_and_preferences(self):
+        admin_cookie = self.login()
+        _, helper = self.call("/api/users", "POST", {
+            "username": "infobrett-hilfe", "displayName": "Infobrett Hilfe", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {"tasks": True},
+        }, admin_cookie)
+        helper_cookie = self.login("infobrett-hilfe", "sicheres-passwort")
+        _, preferences = self.call("/api/notification-preferences", "PUT", {
+            "notificationEmail": "hilfe@example.de", "notificationPreference": "mentions",
+        }, helper_cookie)
+        self.assertEqual(preferences["notificationPreference"], "mentions")
+        _, announcement = self.call("/api/announcements", "POST", {
+            "title": "Heute zu Hause", "text": "Bitte @infobrett-hilfe beachten.",
+            "importance": "important", "validUntil": (date.today() + timedelta(days=1)).isoformat(),
+        }, admin_cookie)
+        self.assertIn(helper["id"], announcement["mentionedUserIds"])
+        self.assertNotIn(helper["id"], announcement["readByUserIds"])
+        _, read = self.call("/api/announcements/" + announcement["id"] + "/read", "PUT", {}, helper_cookie)
+        self.assertIn(helper["id"], read["readByUserIds"])
+        _, visible = self.call("/api/data", cookie=helper_cookie)
+        self.assertIn(announcement["id"], [item["id"] for item in visible["announcements"]])
+
+    def test_topic_comments_follow_target_permissions(self):
+        admin_cookie = self.login()
+        _, application = self.call("/api/cases", "POST", {"title": "Kommunikationsantrag"}, admin_cookie)
+        _, task = self.call("/api/tasks", "POST", {"title": "Kommunikationsaufgabe", "status": "open"}, admin_cookie)
+        _, helper = self.call("/api/users", "POST", {
+            "username": "themen-hilfe", "displayName": "Themen Hilfe", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {"tasks": True, "cases": False},
+        }, admin_cookie)
+        helper_cookie = self.login("themen-hilfe", "sicheres-passwort")
+        _, comment = self.call("/api/topic-comments", "POST", {
+            "targetType": "task", "targetId": task["id"], "text": "Das hat heute gut geklappt.",
+        }, helper_cookie)
+        self.assertEqual(comment["createdByUserId"], helper["id"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/topic-comments", "POST", {
+                "targetType": "case", "targetId": application["id"], "text": "Nicht sichtbar",
+            }, helper_cookie)
+        self.assertEqual(error.exception.code, 403)
+        _, visible = self.call("/api/data", cookie=helper_cookie)
+        self.assertIn(comment["id"], [item["id"] for item in visible["topicComments"]])
+        self.assertNotIn("case", [item["targetType"] for item in visible["topicComments"]])
 
 
 if __name__ == "__main__": unittest.main()

@@ -6,12 +6,15 @@ import json
 import mimetypes
 import os
 import base64
+import re
 import secrets
+import smtplib
 import threading
 import time
 import uuid
 import calendar
 from datetime import date, timedelta
+from email.message import EmailMessage
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +26,13 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).resolve()
 DATA_FILE = DATA_DIR / "familie.json"
 PUBLIC_DIR = Path(__file__).parent.joinpath("public").resolve()
 PASSWORD = os.getenv("APP_PASSWORD", "miteinander")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "miteinander@localhost")
+SMTP_TLS = os.getenv("SMTP_TLS", "true").lower() not in {"0", "false", "no"}
 MAX_BODY = 8_000_000
 RECEIPTS_DIR = DATA_DIR / "receipts"
 CASE_FILES_DIR = DATA_DIR / "case-files"
@@ -45,6 +55,7 @@ def empty_data() -> dict:
     return {
         "family": {"name": "Unsere Familie", "person": "Linea", "createdAt": now()},
         "cases": [], "correspondence": [], "tasks": [], "documents": [], "messages": [], "ledger": [],
+        "announcements": [], "topicComments": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
         "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
@@ -99,6 +110,7 @@ def load_data() -> dict:
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
         "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [],
+        "announcements": [], "topicComments": [],
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
     }.items():
         if key not in loaded:
@@ -304,6 +316,37 @@ def sync_deadline_reminder(entry: dict, user: dict) -> None:
         entry["reminderTaskId"] = task["id"]
 
 
+def mentioned_user_ids(text: str) -> list[str]:
+    lowered = text.lower()
+    return [user["id"] for user in data.get("users", []) if user.get("username") and f"@{user['username'].lower()}" in lowered]
+
+
+def send_notification_email(recipient: str) -> None:
+    if not SMTP_HOST or not recipient:
+        return
+    message = EmailMessage()
+    message["Subject"] = "Neue Information bei Miteinander"
+    message["From"] = SMTP_FROM
+    message["To"] = recipient
+    message.set_content("Du hast bei Miteinander eine neue Information erhalten.\n\n" + (f"Öffnen: {APP_BASE_URL}\n\n" if APP_BASE_URL else "") + "Aus Datenschutzgründen enthält diese E-Mail keine weiteren Details.")
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as client:
+            if SMTP_TLS: client.starttls()
+            if SMTP_USER: client.login(SMTP_USER, SMTP_PASSWORD)
+            client.send_message(message)
+    except Exception as error:
+        print(f"E-Mail-Benachrichtigung fehlgeschlagen: {error}")
+
+
+def notify_users(author_id: str, mentions: list[str], notify_all: bool = False) -> None:
+    for recipient in data.get("users", []):
+        if recipient["id"] == author_id or not recipient.get("active", True) or recipient.get("accessStatus", "active") != "active": continue
+        preference = recipient.get("notificationPreference", "mentions")
+        should_notify = recipient["id"] in mentions or notify_all and preference == "all"
+        if should_notify and preference != "none" and recipient.get("notificationEmail"):
+            threading.Thread(target=send_notification_email, args=(recipient["notificationEmail"],), daemon=True).start()
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "Miteinander/0.1"
 
@@ -364,7 +407,7 @@ class Handler(SimpleHTTPRequestHandler):
             photo_data = str(payload.get("photoData") or "")
             if photo_data: member.update(save_member_photo(photo_data, str(payload.get("photoName") or "Profilfoto")))
             is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
-            created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": full_permissions() if is_admin else invitation.get("permissions", {}), "passwordHash": hash_password(password), "createdAt": now()}
+            created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": full_permissions() if is_admin else invitation.get("permissions", {}), "notificationEmail": member["email"], "notificationPreference": "mentions", "passwordHash": hash_password(password), "createdAt": now()}
             with lock:
                 data["members"].append(member); data["users"].append(created); invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = created["id"]; save_data(data)
             token_value = secrets.token_urlsafe(32); sessions[token_value] = {"userId": created["id"], "expires": time.time() + 43200}
@@ -408,16 +451,60 @@ class Handler(SimpleHTTPRequestHandler):
                 "taskOptions": data.get("taskOptions", {"categories": []}) if self.allowed(user, "tasks") else {"categories": []},
                 "documents": data["documents"] if self.allowed(user, "documents") else [],
                 "messages": [],
+                "announcements": data.get("announcements", []),
+                "topicComments": [item for item in data.get("topicComments", []) if item.get("targetType") == "goal" or item.get("targetType") == "case" and self.allowed(user, "cases") or item.get("targetType") == "task" and self.allowed(user, "tasks")],
                 "ledger": data["ledger"] if self.allowed(user, "ledger") else [],
                 "accounts": data["accounts"] if self.allowed(user, "ledger") else [],
                 "ledgerOptions": data.get("ledgerOptions", {"descriptions": [], "categories": []}) if self.allowed(user, "ledger") else {"descriptions": [], "categories": []},
                 "members": data["members"],
                 "currentUser": self.public_user(user),
-                "users": [self.public_user(u) for u in data["users"]] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"]} for u in data["users"]],
+                "users": [self.public_user(u) for u in data["users"]] if user.get("isAdmin") else [{"id": u["id"], "displayName": u["displayName"], "username": u.get("username", "")} for u in data["users"] if u.get("active", True)],
                 "invitations": [{key: value for key, value in item.items() if key != "tokenHash"} for item in data.get("invitations", [])] if user.get("isAdmin") else [],
                 "capabilities": {key: self.allowed(user, key) for key in PERMISSION_KEYS} | {"manageAccess": bool(user.get("isAdmin"))},
+                "emailNotificationsConfigured": bool(SMTP_HOST),
             }
             return self.send_json(200, visible)
+        if path == "/api/notification-preferences" and method == "PUT":
+            payload = self.read_json(); preference = str(payload.get("notificationPreference") or "mentions")
+            if preference not in {"all", "mentions", "none"}: return self.send_json(400, {"error": "Ungültige Benachrichtigungseinstellung."})
+            user["notificationPreference"] = preference; user["notificationEmail"] = clean(str(payload.get("notificationEmail") or "")); save_data(data)
+            return self.send_json(200, self.public_user(user))
+        communication_parts = path.strip("/").split("/")
+        if communication_parts[:2] == ["api", "announcements"]:
+            announcement_id = communication_parts[2] if len(communication_parts) >= 3 else None
+            action = communication_parts[3] if len(communication_parts) == 4 else None
+            announcement = next((item for item in data.get("announcements", []) if item["id"] == announcement_id), None) if announcement_id else None
+            if method == "POST" and not announcement_id:
+                payload = self.read_json(); text = clean(str(payload.get("text") or "")); title = clean(str(payload.get("title") or ""))
+                if not title or not text: return self.send_json(400, {"error": "Überschrift und Information werden benötigt."})
+                mentions = mentioned_user_ids(text)
+                item = {"id": str(uuid.uuid4()), "title": title, "text": text, "importance": payload.get("importance") if payload.get("importance") in {"normal", "important"} else "normal", "validUntil": clean(str(payload.get("validUntil") or "")), "mentionedUserIds": mentions, "readByUserIds": [user["id"]], "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                with lock: data.setdefault("announcements", []).insert(0, item); save_data(data)
+                notify_users(user["id"], mentions, notify_all=True); return self.send_json(201, item)
+            if not announcement: return self.send_json(404, {"error": "Information nicht gefunden."})
+            if method == "PUT" and action == "read":
+                if user["id"] not in announcement.setdefault("readByUserIds", []): announcement["readByUserIds"].append(user["id"]); save_data(data)
+                return self.send_json(200, announcement)
+            if method == "DELETE" and not action:
+                if not (user.get("isAdmin") or announcement.get("createdByUserId") == user["id"]): return self.send_json(403, {"error": "Du kannst diese Information nicht löschen."})
+                data["announcements"].remove(announcement); save_data(data); return self.send_json(200, {"ok": True})
+        if communication_parts[:2] == ["api", "topic-comments"]:
+            comment_id = communication_parts[2] if len(communication_parts) == 3 else None
+            if method == "POST" and not comment_id:
+                payload = self.read_json(); target_type = str(payload.get("targetType") or ""); target_id = str(payload.get("targetId") or ""); text = clean(str(payload.get("text") or ""))
+                collection = {"case": "cases", "task": "tasks", "goal": "goals"}.get(target_type)
+                permission = {"case": "cases", "task": "tasks", "goal": None}.get(target_type)
+                if not text: return self.send_json(400, {"error": "Der Beitrag darf nicht leer sein."})
+                if not collection or not any(item["id"] == target_id for item in data.get(collection, [])): return self.send_json(400, {"error": "Das zugehörige Thema wurde nicht gefunden."})
+                if permission and not self.allowed(user, permission): return self.send_json(403, {"error": "Keine Berechtigung für dieses Thema."})
+                mentions = mentioned_user_ids(text); comment = {"id": str(uuid.uuid4()), "targetType": target_type, "targetId": target_id, "text": text, "mentionedUserIds": mentions, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                with lock: data.setdefault("topicComments", []).append(comment); save_data(data)
+                notify_users(user["id"], mentions); return self.send_json(201, comment)
+            comment = next((item for item in data.get("topicComments", []) if item["id"] == comment_id), None)
+            if not comment: return self.send_json(404, {"error": "Beitrag nicht gefunden."})
+            if method == "DELETE":
+                if not (user.get("isAdmin") or comment.get("createdByUserId") == user["id"]): return self.send_json(403, {"error": "Du kannst diesen Beitrag nicht löschen."})
+                data["topicComments"].remove(comment); save_data(data); return self.send_json(200, {"ok": True})
         if path.startswith("/api/receipts/") and method == "GET":
             if not self.allowed(user, "ledger"):
                 return self.send_json(403, {"error": "Kein Zugriff auf das Kassenbuch."})
@@ -766,6 +853,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "displayName": clean(str(payload.get("displayName") or username)), "role": role,
                     "memberId": payload.get("memberId") or None, "isAdmin": is_admin,
                     "active": True, "accessStatus": "active",
+                    "notificationEmail": clean(str(payload.get("notificationEmail") or "")), "notificationPreference": "mentions",
                     "permissions": full_permissions() if is_admin else {key: bool(payload.get("permissions", {}).get(key)) for key in PERMISSION_KEYS},
                     "passwordHash": hash_password(password), "createdAt": now(),
                 }

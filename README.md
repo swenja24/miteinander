@@ -16,6 +16,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
 - Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
+- Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
 - Responsive, tastaturbedienbare Oberfläche
 
 > Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
@@ -56,6 +57,10 @@ Für ein Update in Arcane das neue `latest`-Image ziehen und den Stack neu berei
 Für einen kontrollierteren Produktivbetrieb kann Arcane statt `latest` auch einen konkreten `sha-…`-Tag verwenden. Der Build erfolgt weiterhin bei jedem Push, aber der produktive Wechsel wird dann bewusst vorgenommen.
 
 Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen. Port `3080` muss dann nicht öffentlich freigegeben werden. Die App setzt bewusst keine `Secure`-Cookie-Markierung, damit sie im lokalen Netz zunächst auch per HTTP funktioniert; bei öffentlichem Betrieb sollte ausschließlich HTTPS verwendet werden.
+
+### Optionale E-Mail-Benachrichtigungen
+
+Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen. `APP_BASE_URL` ist die öffentliche HTTPS-Adresse der Anwendung. Die E-Mail enthält bewusst weder Nachrichtentext noch Gesundheitsdaten, sondern nur den Hinweis, dass in Miteinander eine neue Information vorliegt. Ohne SMTP-Konfiguration funktionieren Infobrett, Erwähnungen und Lesebestätigungen weiterhin; lediglich der externe E-Mail-Versand bleibt aus.
 
 ## Backup und Wiederherstellung
 
