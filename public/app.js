@@ -108,10 +108,11 @@ function ledgerPage(){
 }
 function accessSection(){
   if(!state.capabilities.manageAccess) return '';
-  const labels={cases:'Anträge',tasks:'Aufgaben',documents:'Dokumente',ledger:'Kassenbuch',family:'Familie'};
+  const labels={cases:'Anträge',tasks:'Aufgaben',documents:'Dokumente',ledger:'Kassenbuch',family:'Team'};
   return `<div class="access-head"><h2 class="section-title">Zugänge & Berechtigungen</h2><button class="primary" data-user-add>+ Neuer Zugang</button></div><p class="access-note">Linea und die gesetzliche Betreuung dürfen Zugänge verwalten. Für alle anderen legst du die sichtbaren Bereiche einzeln fest.</p><div class="member-grid">${state.users.map(u=>`<article class="card user-card"><div><strong>${esc(u.displayName)}</strong><small>@${esc(u.username)} · ${esc(u.role)}</small></div><div class="permission-tags">${u.active===false?'<span class="status orange">Deaktiviert</span>':u.isAdmin?'<span class="status">Vollzugriff</span>':Object.entries(u.permissions||{}).filter(([,allowed])=>allowed).map(([key])=>`<span class="status gray">${labels[key]}</span>`).join('')||'<span class="status orange">Kein Bereich</span>'}</div><div class="row-actions"><button class="icon-btn" data-user-edit="${u.id}" aria-label="Zugang bearbeiten">✎</button>${u.id!==state.currentUser.id&&u.active!==false?`<button class="icon-btn danger" data-user-delete="${u.id}" aria-label="Zugang deaktivieren">×</button>`:''}</div></article>`).join('')}</div>`;
 }
-function familyPage(){return `${header('Zusammenarbeit','Familie','Wer arbeitet mit und darf Aufgaben übernehmen?',`<button class="primary" data-add="member">+ Neue Person</button>`)}<section class="card"><h2 class="section-title" style="margin-top:0">Familienbereich</h2><form id="family-form" class="form-grid"><div><label>Name des Bereichs</label><input name="name" value="${esc(state.family.name)}"></div><div><label>Name der leistungsberechtigten Person</label><input name="person" value="${esc(state.family.person)}"></div><div class="full form-actions"><button class="primary">Änderungen speichern</button></div></form></section><h2 class="section-title">Beteiligte Personen</h2><div class="member-grid">${state.members.map(m=>`<article class="card member"><div class="avatar" style="background:${esc(m.color)}">${esc(m.name.slice(0,1).toUpperCase())}</div><div class="grow"><strong>${esc(m.name)}</strong><small>${esc(m.role)}</small></div><button class="icon-btn" data-edit="member" data-id="${m.id}">✎</button></article>`).join('')}</div>${accessSection()}`;}
+function memberAvatar(m,large=false){return `<div class="avatar ${large?'avatar-large':''}" style="background:${esc(m.color)}">${m.photoFile?`<img src="/api/member-files/${encodeURIComponent(m.photoFile)}" alt="Foto von ${esc(m.name)}">`:esc(m.name.slice(0,1).toUpperCase())}</div>`;}
+function familyPage(){return `${header('Zusammenarbeit','Team','Wer gehört zum Team, übernimmt Aufgaben und ist wie erreichbar?',`<button class="primary" data-add="member">+ Neue Person</button>`)}<section class="card"><h2 class="section-title" style="margin-top:0">Team-Bereich</h2><form id="family-form" class="form-grid"><div><label>Name des Teams</label><input name="name" value="${esc(state.family.name)}"></div><div><label>Name der leistungsberechtigten Person</label><input name="person" value="${esc(state.family.person)}"></div><div class="full form-actions"><button class="primary">Änderungen speichern</button></div></form></section><h2 class="section-title">Beteiligte Personen</h2><p class="access-note">Klicke auf eine Person, um ihre Vorstellung und Kontaktdaten anzusehen.</p><div class="member-grid">${state.members.map(m=>`<article class="card member member-clickable" data-member-profile="${m.id}" tabindex="0" role="button">${memberAvatar(m)}<div class="grow"><strong>${esc(m.name)}</strong><small>${esc(m.role)}</small></div><button class="icon-btn" data-edit="member" data-id="${m.id}" aria-label="Profil von ${esc(m.name)} bearbeiten">✎</button></article>`).join('')}</div>${accessSection()}`;}
 
 const configs={
   case:{collection:'cases',title:'Antrag',newTitle:'Neuer Antrag',fields:[['title','Titel','text'],['area','Antragsbereich','caseArea'],['authority','Behörde / Kontakt','text'],['assignee','Verantwortlich','members'],['status','Status','select','draft:Entwurf|collecting:Unterlagen sammeln|submitted:Eingereicht|question:Rückfrage|approved:Bewilligt|done:Erledigt'],['submittedAt','Versendet am','optionalDate'],['receivedAt','Bei der Stelle eingegangen am','optionalDate'],['parentCaseId','Zugehöriger Hauptantrag (optional)','cases'],['caseFileInput','Brief fotografieren oder PDF/Bild hochladen','casefile'],['description','Notiz','textarea']]},
@@ -120,7 +121,7 @@ const configs={
   document:{collection:'documents',title:'Dokument',newTitle:'Neues Dokument',fields:[['title','Dokumentname','text'],['category','Kategorie','select','Antrag:Antrag|Bescheid:Bescheid|Schriftverkehr:Schriftverkehr|Nachweis:Nachweis|Sonstiges:Sonstiges'],['date','Datum','date'],['caseId','Zugehöriger Antrag','cases'],['location','Ablageort / Aktenzeichen','text'],['documentFileInput','Dokument fotografieren, scannen oder hochladen','documentfile'],['notes','Notiz','textarea']]},
   ledger:{collection:'ledger',title:'Buchung',newTitle:'Neue Buchung',fields:[['description','Beschreibung','suggestions','descriptions'],['accountId','Konto','accounts'],['type','Art','select','expense:Ausgabe|income:Einnahme'],['amount','Betrag in Euro','money'],['date','Datum','date'],['category','Kategorie','suggestions','categories'],['payee','Empfänger / Quelle','text'],['receiptStatus','Beleg','select','available:Beleg vorhanden|none:Kein Beleg vorhanden'],['receipt','Belegnummer (optional)','text'],['receiptImage','Rechnung fotografieren oder hochladen','image'],['notes','Notiz','textarea']]},
   account:{collection:'accounts',title:'Konto',newTitle:'Neues Konto',fields:[['name','Kontoname','text'],['type','Kontoart','select','Bargeld:Bargeld|Bankkonto:Bankkonto'],['color','Farbe','color']]},
-  member:{collection:'members',title:'Person',newTitle:'Neue Person',fields:[['name','Name','text'],['role','Rolle','select','Leistungsberechtigte Person:Leistungsberechtigte Person|Angehörige:Angehörige|Gesetzliche Betreuung:Gesetzliche Betreuung|Assistenz:Assistenz'],['color','Farbe','color']]}
+  member:{collection:'members',title:'Person',newTitle:'Neue Person',fields:[['name','Name','text'],['role','Rolle','select','Leistungsberechtigte Person:Leistungsberechtigte Person|Angehörige:Angehörige|Gesetzliche Betreuung:Gesetzliche Betreuung|Assistenz:Assistenz'],['email','E-Mail','email'],['phone','Telefon','tel'],['address','Adresse','textarea'],['personalWords','Ein paar persönliche Worte','textarea'],['photoInput','Foto aufnehmen oder hochladen','image'],['color','Farbe','color']]}
 };
 function options(spec,value){return spec.split('|').map(x=>{const[v,l]=x.split(':');return `<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`}).join('');}
 function receiptDataUrl(file){
@@ -196,14 +197,16 @@ function openForm(type,id,defaults={}){
   $('[name="eventType"]',$('#entry-form'))?.addEventListener('change',updateCaseEventFields);updateCaseEventFields();
   $('#entry-form').onsubmit=async e=>{
     e.preventDefault();
-    const formData=new FormData(e.target),file=formData.get('receiptImage'),caseFile=formData.get('caseFileInput'),documentFile=formData.get('documentFileInput');
+    const formData=new FormData(e.target),file=formData.get('receiptImage'),caseFile=formData.get('caseFileInput'),documentFile=formData.get('documentFileInput'),photo=formData.get('photoInput');
     formData.delete('receiptImage');
     formData.delete('caseFileInput');
     formData.delete('documentFileInput');
+    formData.delete('photoInput');
     const payload=Object.fromEntries(formData);
     if(file?.size) payload.receiptImage=await receiptDataUrl(file);
     if(caseFile?.size){payload.caseFile=await caseFileDataUrl(caseFile);payload.caseFileName=caseFile.name;}
     if(documentFile?.size){payload.documentFile=await caseFileDataUrl(documentFile);payload.documentFileName=documentFile.name;}
+    if(photo?.size){payload.photoData=await receiptDataUrl(photo);payload.photoName=photo.name;}
     await request(`/api/${c.collection}${id?'/'+id:''}`,{method:id?'PUT':'POST',body:JSON.stringify(payload)});
     $('#modal').close();await refresh();toast('Gespeichert.');
   };
@@ -211,6 +214,12 @@ function openForm(type,id,defaults={}){
 function showSimpleModal(title,fields,onSubmit){
   $('#modal-content').innerHTML=`<h2>${title}</h2><form id="simple-form" class="form-grid">${fields}<div class="full form-actions"><button type="button" class="secondary" data-close>Abbrechen</button><button class="primary">Speichern</button></div></form>`;
   $('#modal').showModal();$('[data-close]').onclick=()=>$('#modal').close();$('#simple-form').onsubmit=async event=>{event.preventDefault();await onSubmit(Object.fromEntries(new FormData(event.target)));$('#modal').close();await refresh();toast('Gespeichert.');};
+}
+function openMemberProfile(id){
+  const member=state.members.find(item=>item.id===id);if(!member)return;
+  const contact=[member.phone?`<a href="tel:${esc(member.phone)}">${esc(member.phone)}</a>`:'',member.email?`<a href="mailto:${esc(member.email)}">${esc(member.email)}</a>`:''].filter(Boolean).join('<br>');
+  $('#modal-content').innerHTML=`<section class="team-profile"><div class="team-profile-head">${memberAvatar(member,true)}<div><p class="eyebrow">${esc(member.role)}</p><h2>${esc(member.name)}</h2></div></div><div class="profile-grid"><div class="wide-info"><h3>Persönliche Worte</h3><p>${textBlock(member.personalWords,'Diese Person hat sich noch nicht vorgestellt.')}</p></div><div><h3>Kontaktdaten</h3><p>${contact||'<span class="muted">Noch keine Kontaktdaten hinterlegt.</span>'}</p></div><div><h3>Adresse</h3><p>${textBlock(member.address,'Noch keine Adresse hinterlegt.')}</p></div></div><div class="form-actions"><button class="secondary" data-close>Schließen</button><button class="primary" data-profile-member-edit="${member.id}">Profil bearbeiten</button></div></section>`;
+  $('#modal').showModal();$('[data-close]').onclick=()=>$('#modal').close();$('[data-profile-member-edit]').onclick=()=>openForm('member',member.id);
 }
 function openProfileForm(){const p=state.personProfile||{};showSimpleModal('Profil von Linea bearbeiten',`<div class="full"><label>Kurzvorstellung</label><textarea name="introduction">${esc(p.introduction||'')}</textarea></div><div class="full"><label>Stärken</label><textarea name="strengths">${esc(p.strengths||'')}</textarea></div><div class="full"><label>Unterstützungsbedarf</label><textarea name="supportNeeds">${esc(p.supportNeeds||'')}</textarea></div><div class="full"><label>BEI / Bedarfsermittlung</label><textarea name="beiSummary">${esc(p.beiSummary||'')}</textarea></div><div class="full"><label>Allgemeine Wünsche und Ausrichtung</label><textarea name="wishes">${esc(p.wishes||'')}</textarea></div>`,payload=>request('/api/person-profile',{method:'PUT',body:JSON.stringify(payload)}));}
 function openProfilePhotoForm(){
@@ -228,7 +237,7 @@ function openContactForm(id){const contact=id?state.importantContacts.find(entry
 function openContactCategories(){const values=state.contactOptions?.categories||[];showSimpleModal('Kontaktkategorien bearbeiten',`<div class="full"><label>Eine Kategorie pro Zeile</label><textarea name="categories" rows="12">${esc(values.join('\n'))}</textarea><small class="field-help">Entfernte Kategorien bleiben bei bereits vorhandenen Kontakten erhalten, werden aber nicht mehr vorgeschlagen.</small></div>`,payload=>request('/api/contact-options',{method:'PUT',body:JSON.stringify({categories:payload.categories.split('\n').map(value=>value.trim()).filter(Boolean)})}));}
 function openUserForm(id){
   const user=id?state.users.find(u=>u.id===id):{};
-  const permissionLabels={cases:'Anträge',tasks:'Aufgaben',documents:'Dokumente',ledger:'Kassenbuch',family:'Familie'};
+  const permissionLabels={cases:'Anträge',tasks:'Aufgaben',documents:'Dokumente',ledger:'Kassenbuch',family:'Team'};
   $('#modal-content').innerHTML=`<h2>${id?'Zugang bearbeiten':'Neuer Zugang'}</h2><form id="user-form" class="form-grid">
     <div><label>Anzeigename</label><input name="displayName" value="${esc(user.displayName||'')}" required></div>
     <div><label>Benutzername</label><input name="username" value="${esc(user.username||'')}" ${id?'disabled':''} required></div>
@@ -280,7 +289,8 @@ function bind(){
   $$('[data-contact-delete]').forEach(button=>button.onclick=async()=>{if(confirm('Diesen Kontakt wirklich löschen?')){await request('/api/contacts/'+button.dataset.contactDelete,{method:'DELETE'});await refresh();toast('Kontakt gelöscht.');}});
   $('#contact-search')?.addEventListener('change',event=>{contactFilters.search=event.target.value;render();});
   $('#contact-category')?.addEventListener('change',event=>{contactFilters.category=event.target.value;render();});
-  $('#family-form')?.addEventListener('submit',async e=>{e.preventDefault();await request('/api/family',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});await refresh();toast('Familienbereich gespeichert.');});
+  $('#family-form')?.addEventListener('submit',async e=>{e.preventDefault();await request('/api/family',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});await refresh();toast('Team-Bereich gespeichert.');});
+  $$('[data-member-profile]').forEach(card=>{card.onclick=event=>{if(event.target.closest('[data-edit]'))return;openMemberProfile(card.dataset.memberProfile);};card.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();openMemberProfile(card.dataset.memberProfile);}};});
   $('[data-user-add]')?.addEventListener('click',()=>openUserForm());
   $$('[data-user-edit]').forEach(button=>button.onclick=()=>openUserForm(button.dataset.userEdit));
   $$('[data-user-delete]').forEach(button=>button.onclick=async()=>{if(confirm('Diesen Zugang wirklich deaktivieren?')){await request('/api/users/'+button.dataset.userDelete,{method:'DELETE'});await refresh();toast('Zugang deaktiviert.');}});

@@ -1,0 +1,39 @@
+.member-clickable {
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+}
+.member-clickable:hover,
+.member-clickable:focus {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  outline: 3px solid rgba(40, 92, 77, .12);
+}
+.avatar {
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-large {
+  width: 92px;
+  height: 92px;
+  font-size: 2rem;
+}
+.team-profile-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+.team-profile-head h2 { margin: 3px 0 0; }
+.team-profile a {
+  color: var(--green);
+  font-weight: 700;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}

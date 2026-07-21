@@ -50,8 +50,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260716-6', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260716-6") as response:
+            self.assertIn('/app.js?v=20260717-1', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260717-1") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -379,6 +379,24 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/ledger", "POST", {"description": "Nicht erlaubt"}, user_cookie)
         self.assertEqual(error.exception.code, 403)
+
+    def test_team_member_profile_and_photo_are_protected(self):
+        cookie = self.login()
+        image = "data:image/png;base64," + base64.b64encode(b"profile-image").decode()
+        _, member = self.call("/api/members", "POST", {
+            "name": "Mara", "role": "Assistenz", "email": "mara@example.de",
+            "phone": "+49 123", "personalWords": "Ich mag Musik.",
+            "photoData": image, "photoName": "mara.png",
+        }, cookie)
+        self.assertEqual(member["personalWords"], "Ich mag Musik.")
+        self.assertTrue(member["photoFile"].endswith(".png"))
+        request = urllib.request.Request("http://127.0.0.1:8765/api/member-files/" + member["photoFile"])
+        request.add_header("Cookie", cookie)
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.read(), b"profile-image")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen("http://127.0.0.1:8765/api/member-files/" + member["photoFile"])
+        self.assertEqual(error.exception.code, 401)
 
 
 if __name__ == "__main__": unittest.main()

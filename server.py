@@ -29,6 +29,7 @@ CASE_FILES_DIR = DATA_DIR / "case-files"
 DOCUMENT_FILES_DIR = DATA_DIR / "document-files"
 ABOUT_FILES_DIR = DATA_DIR / "about-files"
 ROUTINE_FILES_DIR = DATA_DIR / "routine-files"
+MEMBER_FILES_DIR = DATA_DIR / "member-files"
 COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -89,6 +90,7 @@ def load_data() -> dict:
     DOCUMENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
     ABOUT_FILES_DIR.mkdir(parents=True, exist_ok=True)
     ROUTINE_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    MEMBER_FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         loaded = json.loads(DATA_FILE.read_text("utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -196,6 +198,14 @@ def save_about_file(data_url: str, original_name: str = "Datei") -> dict:
 
 def save_routine_file(data_url: str, original_name: str = "Ablaufplan") -> dict:
     return save_uploaded_file(data_url, original_name, ROUTINE_FILES_DIR)
+
+
+def save_member_photo(data_url: str, original_name: str = "Profilfoto") -> dict:
+    saved = save_uploaded_file(data_url, original_name, MEMBER_FILES_DIR)
+    if not saved["attachmentType"].startswith("image/"):
+        (MEMBER_FILES_DIR / saved["attachmentFile"]).unlink(missing_ok=True)
+        raise ValueError("Als Profilfoto wird ein Bild benötigt")
+    return {"photoFile": saved["attachmentFile"], "photoName": saved["attachmentName"]}
 
 
 def clean(value):
@@ -467,6 +477,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content))); self.send_header("Content-Disposition", f"inline; filename={filename}")
             self.send_header("Cache-Control", "private, max-age=3600"); self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers(); self.wfile.write(content); return
+        if path.startswith("/api/member-files/") and method == "GET":
+            if not self.allowed(user, "family"): return self.send_json(403, {"error": "Kein Zugriff auf das Team."})
+            filename = path.rsplit("/", 1)[-1]
+            if not filename or filename != Path(filename).name: return self.send_json(404, {"error": "Foto nicht gefunden."})
+            attachment = MEMBER_FILES_DIR / filename
+            if not attachment.is_file(): return self.send_json(404, {"error": "Foto nicht gefunden."})
+            content = attachment.read_bytes(); self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(attachment)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content))); self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff"); self.end_headers(); self.wfile.write(content); return
         if path == "/api/family" and method == "PUT":
             if not self.allowed(user, "family"):
                 return self.send_json(403, {"error": "Keine Berechtigung."})
@@ -776,6 +796,8 @@ class Handler(SimpleHTTPRequestHandler):
                 case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
                 document_file = payload.pop("documentFile", None) if collection == "documents" else None
                 document_file_name = payload.pop("documentFileName", "Dokument") if collection == "documents" else "Dokument"
+                member_photo = payload.pop("photoData", None) if collection == "members" else None
+                member_photo_name = payload.pop("photoName", "Profilfoto") if collection == "members" else "Profilfoto"
                 item = {"id": str(uuid.uuid4()), **clean(payload), "createdAt": now()}
                 item["createdByUserId"] = user["id"]
                 item["createdByName"] = user["displayName"]
@@ -786,6 +808,8 @@ class Handler(SimpleHTTPRequestHandler):
                     item.update(save_case_file(case_file, str(case_file_name)))
                 if document_file:
                     item.update(save_document_file(document_file, str(document_file_name)))
+                if member_photo:
+                    item.update(save_member_photo(member_photo, str(member_photo_name)))
                 if collection == "correspondence":
                     sync_deadline_reminder(item, user)
                 if collection == "ledger":
@@ -819,6 +843,8 @@ class Handler(SimpleHTTPRequestHandler):
                 case_file_name = payload.pop("caseFileName", "Dokument") if collection in {"cases", "correspondence"} else "Dokument"
                 document_file = payload.pop("documentFile", None) if collection == "documents" else None
                 document_file_name = payload.pop("documentFileName", "Dokument") if collection == "documents" else "Dokument"
+                member_photo = payload.pop("photoData", None) if collection == "members" else None
+                member_photo_name = payload.pop("photoName", "Profilfoto") if collection == "members" else "Profilfoto"
                 data[collection][index].update(clean(payload))
                 data[collection][index]["updatedByUserId"] = user["id"]
                 if receipt_image:
@@ -834,6 +860,11 @@ class Handler(SimpleHTTPRequestHandler):
                     data[collection][index].update(save_document_file(document_file, str(document_file_name)))
                     if old_attachment:
                         (DOCUMENT_FILES_DIR / Path(old_attachment).name).unlink(missing_ok=True)
+                if member_photo:
+                    old_photo = data[collection][index].get("photoFile")
+                    data[collection][index].update(save_member_photo(member_photo, str(member_photo_name)))
+                    if old_photo:
+                        (MEMBER_FILES_DIR / Path(old_photo).name).unlink(missing_ok=True)
                 if collection == "correspondence":
                     sync_deadline_reminder(data[collection][index], user)
                 elif collection == "ledger" and data[collection][index].get("receiptStatus") == "none":
@@ -864,6 +895,8 @@ class Handler(SimpleHTTPRequestHandler):
                     (CASE_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
                 if collection == "documents" and removed.get("attachmentFile"):
                     (DOCUMENT_FILES_DIR / Path(removed["attachmentFile"]).name).unlink(missing_ok=True)
+                if collection == "members" and removed.get("photoFile"):
+                    (MEMBER_FILES_DIR / Path(removed["photoFile"]).name).unlink(missing_ok=True)
                 save_data(data)
                 return self.send_json(200, {"ok": True})
         return self.send_json(405, {"error": "Methode nicht erlaubt."})
