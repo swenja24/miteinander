@@ -1365,14 +1365,15 @@ class Handler(SimpleHTTPRequestHandler):
         if len(parts) not in (2, 3) or parts[0] != "api" or parts[1] not in COLLECTIONS:
             return self.send_json(404, {"error": "Nicht gefunden."})
         collection = parts[1]
+        item_id = parts[2] if len(parts) == 3 else None
         if workspace.get("type") == "shared" and collection in {"cases", "correspondence", "documents"}:
             return self.send_json(403, {"error": "Dieser Inhalt gehört in einen persönlichen Bereich."})
         permission = {"cases":"cases", "correspondence":"cases", "tasks":"tasks", "calendarEvents":"calendar", "documents":"documents", "ledger":"ledger", "accounts":"family", "members":"family", "messages":"tasks"}[collection]
-        if not self.allowed(user, permission):
+        editing_own_member = collection == "members" and method == "PUT" and item_id and item_id == user.get("memberId")
+        if not self.allowed(user, permission) and not editing_own_member:
             return self.send_json(403, {"error": "Keine Berechtigung für diesen Bereich."})
         if collection == "accounts" and method in {"POST", "PUT", "DELETE"} and not user.get("isAdmin"):
             return self.send_json(403, {"error": "Konten dürfen nur von Administratoren geändert werden."})
-        item_id = parts[2] if len(parts) == 3 else None
         with lock:
             if method == "POST" and not item_id:
                 payload = self.read_json()
@@ -1448,11 +1449,14 @@ class Handler(SimpleHTTPRequestHandler):
                 audit(workspace_id, user, "created", collection, item["id"], f"{collection}: {item.get('title') or item.get('description') or item.get('name') or 'Eintrag'}")
                 save_data(data)
                 return self.send_json(201, item)
-            index = next((i for i, item in enumerate(data[collection]) if item["id"] == item_id and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id), -1)
+            index = next((i for i, item in enumerate(data[collection]) if item["id"] == item_id and (item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id or collection == "members" and editing_own_member)), -1)
             if index < 0:
                 return self.send_json(404, {"error": "Eintrag nicht gefunden."})
             if method == "PUT":
                 payload = self.read_json()
+                if collection == "members" and editing_own_member and not user.get("isAdmin"):
+                    allowed_profile_fields = {"email", "phone", "address", "personalWords", "photoData", "photoName", "color"}
+                    payload = {key: value for key, value in payload.items() if key in allowed_profile_fields}
                 series_scope = str(payload.pop("_seriesScope", "single")); existing_series = data[collection][index].get("recurrenceSeriesId")
                 if collection in {"tasks", "calendarEvents"} and existing_series and series_scope in {"future", "all"}:
                     date_field = "due" if collection == "tasks" else "date"; old_date = data[collection][index].get(date_field, ""); new_date = str(payload.get(date_field) or old_date)

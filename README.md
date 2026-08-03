@@ -16,6 +16,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
 - Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
+- Rollenabhängige erste Schritte sowie selbst bearbeitbare Teamprofile; normale Teammitglieder können ausschließlich ihr eigenes Profil ändern
 - Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
 - Getrennte persönliche und gemeinsame WG-Bereiche mit einem Login, Bereichsumschalter, eigener Gemeinschaftskasse und gemeinsamen Aufgaben
 - Responsive, tastaturbedienbare Oberfläche

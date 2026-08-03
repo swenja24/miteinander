@@ -54,10 +54,12 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-        self.assertIn('/app.js?v=20260804-4', html)
+        self.assertIn('/app.js?v=20260804-5', html)
         with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260803-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
+            script = response.read().decode()
+            self.assertIn("Rechnung fotografieren oder hochladen", script)
+            self.assertIn("$('#about-nav-label').textContent=`Über ${personName()}`", script)
 
     def test_create_and_persist_task(self):
         cookie = self.login()
@@ -514,6 +516,16 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(visible["capabilities"]["tasks"])
         self.assertFalse(visible["currentUser"]["isAdmin"])
         self.assertIn("Mara Assistenz", [member["name"] for member in visible["members"]])
+        own_member_id = visible["currentUser"]["memberId"]
+        _, own_profile = self.call("/api/members/" + own_member_id, "PUT", {
+            "personalWords": "Meine neuen persönlichen Worte.", "phone": "+49 555", "role": "Gesetzliche Betreuung",
+        }, user_cookie)
+        self.assertEqual(own_profile["personalWords"], "Meine neuen persönlichen Worte.")
+        self.assertEqual(own_profile["role"], "Assistenz")
+        other_member = next(member for member in visible["members"] if member["id"] != own_member_id)
+        with self.assertRaises(urllib.error.HTTPError) as profile_error:
+            self.call("/api/members/" + other_member["id"], "PUT", {"personalWords": "Nicht erlaubt"}, user_cookie)
+        self.assertEqual(profile_error.exception.code, 403)
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/invitations/" + invitation["token"] + "/accept", "POST", {
                 "displayName": "Nochmal", "username": "nochmal", "password": "sicheres-passwort",
