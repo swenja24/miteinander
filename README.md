@@ -67,6 +67,8 @@ Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen.
 
 Unter „Hilfe & Datenschutz“ nennt die App die verantwortliche Stelle der jeweiligen Installation. Dafür in Arcane `DATA_CONTROLLER_NAME` und `DATA_CONTROLLER_CONTACT` setzen. Der persistente Docker-Datenträger `/app/data` muss regelmäßig verschlüsselt gesichert werden; eine Wiederherstellung sollte vor dem Praxiseinsatz getestet werden.
 
+Für einen öffentlichen HTTPS-Betrieb außerdem `COOKIE_SECURE=true` setzen. Zwei-Faktor-Anmeldung, Datenexport, Löschanforderung und Betreiberverwaltung befinden sich unter „Hilfe & Datenschutz“. Weitere Hinweise stehen in [PRIVACY.md](PRIVACY.md) und [SECURITY.md](SECURITY.md).
+
 ## Kalender und Handysynchronisation
 
 Der Kalender verbindet eigene Termine, Aufgaben und Antragsfristen, ohne sie doppelt zu speichern. Sichtbar sind nur Quellen, für die der angemeldete Zugang berechtigt ist. Der persönliche iCal-Link übernimmt dieselben Rechte bei jedem Abruf; wird etwa der Zugriff auf Anträge oder den Kalender entzogen, liefert das Abonnement diese Inhalte nicht mehr. Der Link kann in der App jederzeit erneuert oder widerrufen werden und sollte wie ein Passwort behandelt werden. Für einen von außen erreichbaren HTTPS-Link muss `APP_BASE_URL` auf die öffentliche Adresse gesetzt sein.
@@ -78,6 +80,13 @@ Im Kassenbuch können CSV- und CAMT.053/XML-Kontoauszüge einem Konto zugeordnet
 Es besteht keine Verbindung zur Bank und es werden keine Echtzeitdaten abgerufen. Der Stand entspricht ausschließlich der zuletzt importierten Datei. CSV-Spalten unterscheiden sich je nach Bank; mindestens eine Datums- und eine Betragsspalte müssen erkennbar sein. CAMT.053 ist deshalb nach Möglichkeit das robustere Exportformat.
 
 ## Backup und Wiederherstellung
+
+Die mitgelieferten Skripte erstellen ein Backup mit SHA-256-Prüfsumme und testen die Wiederherstellung in einem kurzlebigen Docker-Volume:
+
+```bash
+./scripts/backup.sh ./backups
+./scripts/restore-test.sh ./backups/miteinander-JJJJMMTT-HHMMSS.tgz
+```
 
 Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files`, hochgeladene Dokumente unter `/app/data/document-files`, Profilfoto sowie BEIs unter `/app/data/about-files` und Anhänge von Ablaufplänen unter `/app/data/routine-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
 

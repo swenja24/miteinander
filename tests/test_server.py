@@ -7,6 +7,9 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import hashlib
+import hmac
+import struct
 from datetime import date, timedelta
 
 
@@ -51,7 +54,7 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-        self.assertIn('/app.js?v=20260803-3', html)
+        self.assertIn('/app.js?v=20260803-4', html)
         with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260803-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
@@ -607,6 +610,65 @@ class ServerTest(unittest.TestCase):
         self.assertIn(private["id"], [area["id"] for area in private_data["workspaces"]])
         self.assertIn(shared["id"], [area["id"] for area in private_data["workspaces"]])
         self.assertNotIn(private["id"], [area["id"] for area in linea_data["workspaces"]])
+
+    def test_operator_can_invite_an_independent_person_without_seeing_content(self):
+        admin = self.login()
+        _, invitation = self.call("/api/operator/invitations", "POST", {
+            "displayName": "Nora", "areaName": "Noras Zuhause", "validDays": 2,
+        }, admin)
+        _, accepted = self.call(f"/api/invitations/{invitation['token']}/accept", "POST", {
+            "displayName": "Nora", "username": "nora-eigen", "password": "sicheres-passwort",
+        })
+        nora_cookie = accepted["user"] and self.login("nora-eigen", "sicheres-passwort")
+        _, nora = self.call("/api/data", cookie=nora_cookie)
+        self.assertEqual(nora["workspace"]["name"], "Noras Zuhause")
+        self.assertEqual(nora["family"]["person"], "Nora")
+        self.call("/api/person-profile", "PUT", {"introduction": "Nur Noras Inhalt"}, nora_cookie)
+        _, private_document = self.call("/api/documents", "POST", {
+            "title": "Noras privates Dokument", "date": date.today().isoformat(),
+            "documentFile": "data:application/pdf;base64," + base64.b64encode(b"private pdf").decode(),
+            "documentFileName": "nora.pdf",
+        }, nora_cookie)
+        _, operator = self.call("/api/operator", cookie=admin)
+        summary = next(item for item in operator["workspaces"] if item["id"] == nora["workspace"]["id"])
+        self.assertNotIn("introduction", summary)
+        _, linea = self.call("/api/data", cookie=admin)
+        self.assertNotIn(nora["workspace"]["id"], [item["id"] for item in linea["workspaces"]])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/document-files/" + private_document["attachmentFile"], cookie=admin)
+        self.assertEqual(error.exception.code, 404)
+
+    def test_existing_account_can_join_an_invited_shared_area(self):
+        admin = self.login()
+        _, existing = self.call("/api/users", "POST", {
+            "username": "bestehend", "displayName": "Bestehend", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {"tasks": True},
+        }, admin)
+        _, shared = self.call("/api/workspaces", "POST", {"name": "WG Beitritt"}, admin)
+        _, invitation = self.call("/api/invitations", "POST", {
+            "displayName": "Bestehend", "role": "Assistenz", "permissions": {"tasks": True},
+        }, admin, shared["id"])
+        existing_cookie = self.login("bestehend", "sicheres-passwort")
+        _, joined = self.call(f"/api/invitations/{invitation['token']}/join", "POST", {}, existing_cookie)
+        self.assertEqual(joined["workspaceId"], shared["id"])
+        _, visible = self.call("/api/data", cookie=existing_cookie, workspace_id=shared["id"])
+        self.assertEqual(visible["workspace"]["name"], "WG Beitritt")
+
+    def test_totp_and_privacy_export(self):
+        cookie = self.login()
+        _, setup = self.call("/api/security/totp/setup", "POST", {}, cookie)
+        padded = setup["secret"] + "=" * ((8 - len(setup["secret"]) % 8) % 8)
+        key = base64.b32decode(padded); counter = int(time.time() // 30)
+        digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest(); offset = digest[-1] & 15
+        code = f"{(struct.unpack('>I', digest[offset:offset+4])[0] & 0x7fffffff) % 1000000:06d}"
+        self.call("/api/security/totp/confirm", "POST", {"code": code}, cookie)
+        with self.assertRaises(urllib.error.HTTPError) as error: self.call("/api/login", "POST", {"username": "linea", "password": "test-passwort"})
+        self.assertEqual(error.exception.code, 401)
+        response, _ = self.call("/api/login", "POST", {"username": "linea", "password": "test-passwort", "otp": code})
+        secured_cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+        _, exported = self.call("/api/privacy/export", cookie=secured_cookie)
+        self.assertEqual(exported["workspace"]["id"], exported["profile"] is not None and exported["workspace"]["id"])
+        self.call("/api/security/totp", "DELETE", {}, secured_cookie)
 
 
 if __name__ == "__main__": unittest.main()

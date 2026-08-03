@@ -25,6 +25,8 @@
         <input id="username" name="username" autocomplete="username" value="linea" required>
         <label for="password">Passwort</label>
         <div class="password-row"><input id="password" type="password" autocomplete="current-password" required><button type="button" class="icon-btn" id="show-password" aria-label="Passwort anzeigen">◉</button></div>
+        <label for="otp">Sicherheitscode (nur wenn aktiviert)</label>
+        <input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
         <p id="login-error" class="error" role="alert"></p>
         <button class="primary wide" type="submit">Sicher anmelden <span>→</span></button>
       </form>
@@ -75,6 +77,6 @@
 
   <dialog id="modal"><div class="modal-card"><button class="modal-close" type="button" aria-label="Schließen">×</button><div id="modal-content"></div></div></dialog>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/app.js?v=20260803-3"></script>
+  <script type="module" src="/app.js?v=20260803-4"></script>
 </body>
 </html>

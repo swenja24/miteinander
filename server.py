@@ -15,6 +15,7 @@ import uuid
 import calendar
 import csv
 import io
+import struct
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from email.message import EmailMessage
@@ -36,7 +37,9 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "miteinander@localhost")
 SMTP_TLS = os.getenv("SMTP_TLS", "true").lower() not in {"0", "false", "no"}
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
 MAX_BODY = 8_000_000
+AUDIT_RETENTION_DAYS = max(30, int(os.getenv("AUDIT_RETENTION_DAYS", "730")))
 RECEIPTS_DIR = DATA_DIR / "receipts"
 CASE_FILES_DIR = DATA_DIR / "case-files"
 DOCUMENT_FILES_DIR = DATA_DIR / "document-files"
@@ -46,6 +49,7 @@ MEMBER_FILES_DIR = DATA_DIR / "member-files"
 COLLECTIONS = {"cases", "correspondence", "tasks", "documents", "messages", "ledger", "members", "accounts", "calendarEvents"}
 lock = threading.Lock()
 sessions: dict[str, dict] = {}
+login_attempts: dict[str, list[float]] = {}
 PERMISSION_KEYS = ("cases", "tasks", "calendar", "documents", "ledger", "family")
 WORKSPACE_COLLECTIONS = ("cases", "correspondence", "tasks", "calendarEvents", "documents", "ledger", "accounts", "members", "announcements", "topicComments", "goals", "rules", "aboutComments", "importantContacts", "beis", "routinePlans")
 
@@ -95,6 +99,34 @@ def password_matches(password: str, encoded: str) -> bool:
 
 def full_permissions() -> dict:
     return {key: True for key in PERMISSION_KEYS}
+
+
+def totp_code(secret: str, timestamp: float | None = None) -> str:
+    key = base64.b32decode(secret.upper() + "=" * ((8 - len(secret) % 8) % 8))
+    counter = int((timestamp or time.time()) // 30)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 15
+    value = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7fffffff) % 1_000_000
+    return f"{value:06d}"
+
+
+def valid_totp(secret: str, supplied: str) -> bool:
+    return any(hmac.compare_digest(totp_code(secret, time.time() + step * 30), supplied.strip()) for step in (-1, 0, 1))
+
+
+def create_private_area(owner: dict, person_name: str, area_name: str) -> dict:
+    workspace = {"id": str(uuid.uuid4()), "name": area_name, "type": "private", "personName": person_name, "createdAt": now(), "createdByUserId": owner["id"]}
+    member = {"id": str(uuid.uuid4()), "workspaceId": workspace["id"], "name": person_name, "role": "Leistungsberechtigte Person", "email": owner.get("notificationEmail", ""), "color": "#5a57d9", "createdAt": now()}
+    owner.setdefault("workspaceMemberships", []).append({"workspaceId": workspace["id"], "memberId": member["id"], "role": "Leistungsberechtigte Person", "isAdmin": True, "permissions": full_permissions()})
+    data["workspaces"].append(workspace); data["members"].append(member)
+    data["accounts"].extend([
+        {"id": str(uuid.uuid4()), "workspaceId": workspace["id"], "name": f"{person_name}s Barkasse", "type": "Bargeld", "color": "#285c4d", "createdAt": now()},
+        {"id": str(uuid.uuid4()), "workspaceId": workspace["id"], "name": f"{person_name}s Bargeld-Spardose", "type": "Bargeld", "color": "#5b57c8", "createdAt": now()},
+        {"id": str(uuid.uuid4()), "workspaceId": workspace["id"], "name": "Wohnungs- und Einkommenskonto", "type": "Bankkonto", "color": "#397a92", "createdAt": now()},
+    ])
+    data.setdefault("workspaceProfiles", {})[workspace["id"]] = {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""}
+    data.setdefault("workspaceOptions", {})[workspace["id"]] = {"contact": {"categories": list(data.get("contactOptions", {}).get("categories", []))}, "ledger": {"descriptions": [], "categories": []}, "task": {"categories": []}}
+    return workspace
 
 
 def calendar_items_for(user: dict, workspace_id: str) -> list[dict]:
@@ -225,6 +257,28 @@ def load_data() -> dict:
         for membership in existing_user.get("workspaceMemberships", []):
             if not membership.get("memberId") and existing_user.get("memberId"): membership["memberId"] = existing_user["memberId"]; changed = True
     if loaded.get("users") and not any(user.get("isSystemAdmin") for user in loaded["users"]): loaded["users"][0]["isSystemAdmin"] = True; changed = True
+    deletion_due = {area["id"] for area in loaded.get("workspaces", []) if area.get("deletionAfter") and area["deletionAfter"] < date.today().isoformat()}
+    if deletion_due:
+        file_locations = [
+            ("ledger", "receiptFile", RECEIPTS_DIR), ("cases", "attachmentFile", CASE_FILES_DIR),
+            ("correspondence", "attachmentFile", CASE_FILES_DIR), ("documents", "attachmentFile", DOCUMENT_FILES_DIR),
+            ("beis", "attachmentFile", ABOUT_FILES_DIR), ("routinePlans", "attachmentFile", ROUTINE_FILES_DIR),
+            ("members", "photoFile", MEMBER_FILES_DIR),
+        ]
+        for collection, field, directory in file_locations:
+            for item in loaded.get(collection, []):
+                if item.get("workspaceId", default_workspace_id) in deletion_due and item.get(field): (directory / Path(item[field]).name).unlink(missing_ok=True)
+        for area_id in deletion_due:
+            profile_file = loaded.get("workspaceProfiles", {}).get(area_id, {}).get("photoFile")
+            if profile_file: (ABOUT_FILES_DIR / Path(profile_file).name).unlink(missing_ok=True)
+        loaded["workspaces"] = [area for area in loaded["workspaces"] if area["id"] not in deletion_due]
+        for collection in WORKSPACE_COLLECTIONS: loaded[collection] = [item for item in loaded.get(collection, []) if item.get("workspaceId", default_workspace_id) not in deletion_due]
+        for existing_user in loaded.get("users", []): existing_user["workspaceMemberships"] = [membership for membership in existing_user.get("workspaceMemberships", []) if membership.get("workspaceId") not in deletion_due]
+        for area_id in deletion_due: loaded.get("workspaceProfiles", {}).pop(area_id, None); loaded.get("workspaceOptions", {}).pop(area_id, None)
+        changed = True
+    audit_cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - AUDIT_RETENTION_DAYS * 86400))
+    retained_audit = [item for item in loaded.get("auditLog", []) if item.get("at", "") >= audit_cutoff]
+    if len(retained_audit) != len(loaded.get("auditLog", [])): loaded["auditLog"] = retained_audit; changed = True
     migrations = loaded.setdefault("schemaMigrations", [])
     if "remove-shared-private-placeholders-v1" not in migrations:
         shared_account = next((account for account in loaded.get("accounts", []) if account.get("name") == "Gemeinsame WG-Barkasse" and account.get("workspaceId", default_workspace_id) == default_workspace_id), None)
@@ -597,28 +651,42 @@ class Handler(SimpleHTTPRequestHandler):
             photo_data = str(payload.get("photoData") or "")
             if photo_data: member.update(save_member_photo(photo_data, str(payload.get("photoName") or "Profilfoto")))
             is_admin = role in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
-            membership = {"workspaceId": invitation_workspace_id, "role": role, "isAdmin": is_admin, "permissions": full_permissions() if is_admin else invitation.get("permissions", {})}
+            membership = {"workspaceId": invitation_workspace_id, "memberId": member["id"], "role": role, "isAdmin": is_admin, "permissions": full_permissions() if is_admin else invitation.get("permissions", {})}
             created = {"id": str(uuid.uuid4()), "username": username, "displayName": display_name, "role": role, "memberId": member["id"], "isAdmin": is_admin, "active": True, "accessStatus": "active", "permissions": membership["permissions"], "workspaceMemberships": [membership], "notificationEmail": member["email"], "notificationPreference": "mentions", "passwordHash": hash_password(password), "createdAt": now()}
             with lock:
-                data["members"].append(member); data["users"].append(created); invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = created["id"]; save_data(data)
+                if invitation.get("createPrivateArea"):
+                    created["workspaceMemberships"] = []; workspace = create_private_area(created, display_name, clean(str(invitation.get("areaName") or f"{display_name}s Bereich")))
+                    member = next(item for item in data["members"] if item.get("workspaceId") == workspace["id"] and item.get("name") == display_name)
+                    created["memberId"] = member["id"]
+                else: data["members"].append(member)
+                data["users"].append(created); invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = created["id"]; save_data(data)
             token_value = secrets.token_urlsafe(32); sessions[token_value] = {"userId": created["id"], "expires": time.time() + 43200}
-            return self.send_json(201, {"ok": True, "user": self.public_user(created)}, {"Set-Cookie": f"miteinander_session={token_value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"})
+            return self.send_json(201, {"ok": True, "user": self.public_user(created)}, {"Set-Cookie": f"miteinander_session={token_value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{'; Secure' if COOKIE_SECURE else ''}"})
         if path == "/api/login" and method == "POST":
             credentials = self.read_json()
             username = str(credentials.get("username") or "linea").strip().lower()
             supplied = str(credentials.get("password", ""))
+            client_key = f"{self.client_address[0]}:{username}"
+            recent = [attempt for attempt in login_attempts.get(client_key, []) if attempt > time.time() - 900]
+            login_attempts[client_key] = recent
+            if len(recent) >= 8: return self.send_json(429, {"error": "Zu viele Anmeldeversuche. Bitte warte 15 Minuten."})
             user = next((u for u in data.get("users", []) if u.get("active", True) and u.get("accessStatus", "active") == "active" and u.get("username", "").lower() == username), None)
             if not user or not password_matches(supplied, user.get("passwordHash", "")):
+                recent.append(time.time())
                 return self.send_json(401, {"error": "Benutzername oder Passwort stimmen nicht."})
+            if user.get("totpEnabled") and not valid_totp(user.get("totpSecret", ""), str(credentials.get("otp") or "")):
+                recent.append(time.time())
+                return self.send_json(401, {"error": "Der Sicherheitscode fehlt oder ist ungültig.", "requiresOtp": True})
+            login_attempts.pop(client_key, None)
             token = secrets.token_urlsafe(32)
             sessions[token] = {"userId": user["id"], "expires": time.time() + 43200}
-            cookie = f"miteinander_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
+            cookie = f"miteinander_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{'; Secure' if COOKIE_SECURE else ''}"
             return self.send_json(200, {"ok": True, "user": self.public_user(user)}, {"Set-Cookie": cookie})
         if path == "/api/logout" and method == "POST":
             jar = SimpleCookie(self.headers.get("Cookie", ""))
             if jar.get("miteinander_session"):
                 sessions.pop(jar["miteinander_session"].value, None)
-            return self.send_json(200, {"ok": True}, {"Set-Cookie": "miteinander_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
+            return self.send_json(200, {"ok": True}, {"Set-Cookie": f"miteinander_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{'; Secure' if COOKIE_SECURE else ''}"})
         base_user = self.session_user()
         if not base_user:
             return self.send_json(401, {"error": "Bitte anmelden."})
@@ -626,6 +694,61 @@ class Handler(SimpleHTTPRequestHandler):
             workspace_id, workspace, user = self.workspace_context(base_user)
         except PermissionError as error:
             return self.send_json(403, {"error": str(error)})
+        if path == "/api/operator" and method == "GET":
+            if not base_user.get("isSystemAdmin"): return self.send_json(403, {"error": "Keine Betreiberberechtigung."})
+            summaries = []
+            for area in data.get("workspaces", []):
+                memberships = [candidate for candidate in data.get("users", []) if any(item.get("workspaceId") == area["id"] for item in candidate.get("workspaceMemberships", []))]
+                summaries.append({"id": area["id"], "name": area["name"], "type": area.get("type"), "createdAt": area.get("createdAt"), "memberCount": len(memberships), "status": area.get("status", "active")})
+            return self.send_json(200, {"workspaces": summaries, "users": len(data.get("users", []))})
+        operator_parts = path.strip("/").split("/")
+        if len(operator_parts) == 4 and operator_parts[:2] == ["api", "operator"] and operator_parts[3] == "status" and method == "PUT":
+            if not base_user.get("isSystemAdmin"): return self.send_json(403, {"error": "Keine Betreiberberechtigung."})
+            target = next((item for item in data.get("workspaces", []) if item["id"] == operator_parts[2]), None); status = str(self.read_json().get("status") or "")
+            if not target or status not in {"active", "paused"}: return self.send_json(400, {"error": "Bereich oder Status ungültig."})
+            target["status"] = status
+            if status == "active": target.pop("deletionRequestedAt", None); target.pop("deletionAfter", None)
+            save_data(data); return self.send_json(200, {"ok": True})
+        if path == "/api/operator/invitations" and method == "POST":
+            if not base_user.get("isSystemAdmin"): return self.send_json(403, {"error": "Keine Betreiberberechtigung."})
+            payload = self.read_json(); display_name = clean(str(payload.get("displayName") or "")); token = secrets.token_urlsafe(32)
+            if not display_name: return self.send_json(400, {"error": "Bitte gib einen Namen an."})
+            days = max(1, min(30, int(payload.get("validDays") or 7))); expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + days * 86400))
+            invitation = {"id": str(uuid.uuid4()), "tokenHash": hashlib.sha256(token.encode()).hexdigest(), "displayName": display_name, "email": clean(str(payload.get("email") or "")), "role": "Leistungsberechtigte Person", "createPrivateArea": True, "areaName": clean(str(payload.get("areaName") or f"{display_name}s Bereich")), "expiresAt": expires, "createdAt": now(), "createdByName": base_user["displayName"]}
+            data.setdefault("invitations", []).insert(0, invitation); save_data(data)
+            return self.send_json(201, {**{key: value for key, value in invitation.items() if key != "tokenHash"}, "token": token})
+        join_parts = path.strip("/").split("/")
+        if len(join_parts) == 4 and join_parts[:2] == ["api", "invitations"] and join_parts[3] == "join" and method == "POST":
+            invitation = next((item for item in data.get("invitations", []) if item.get("tokenHash") == hashlib.sha256(join_parts[2].encode()).hexdigest()), None)
+            if not invitation or invitation.get("createPrivateArea") or invitation.get("acceptedAt") or invitation.get("revokedAt") or invitation.get("expiresAt", "") < now(): return self.send_json(410, {"error": "Diese Einladung ist ungültig oder abgelaufen."})
+            target_id = invitation.get("workspaceId"); target = next((item for item in data["workspaces"] if item["id"] == target_id), None)
+            if not target: return self.send_json(404, {"error": "Bereich nicht gefunden."})
+            if not any(item.get("workspaceId") == target_id for item in base_user.get("workspaceMemberships", [])):
+                base_user.setdefault("workspaceMemberships", []).append({"workspaceId": target_id, "memberId": base_user.get("memberId"), "role": invitation.get("role", "Mitglied"), "isAdmin": invitation.get("role") in {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}, "permissions": invitation.get("permissions", {})})
+            invitation["acceptedAt"] = now(); invitation["acceptedByUserId"] = base_user["id"]; save_data(data)
+            return self.send_json(200, {"ok": True, "workspaceId": target_id})
+        if path == "/api/security/totp/setup" and method == "POST":
+            secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="); base_user["pendingTotpSecret"] = secret; save_data(data)
+            return self.send_json(200, {"secret": secret, "account": base_user.get("username", "")})
+        if path == "/api/security/totp/confirm" and method == "POST":
+            secret = base_user.get("pendingTotpSecret", ""); supplied = str(self.read_json().get("code") or "")
+            if not secret or not valid_totp(secret, supplied): return self.send_json(400, {"error": "Der Sicherheitscode ist ungültig."})
+            base_user["totpSecret"] = secret; base_user["totpEnabled"] = True; base_user.pop("pendingTotpSecret", None); save_data(data); return self.send_json(200, {"ok": True})
+        if path == "/api/security/totp" and method == "DELETE":
+            base_user.pop("totpSecret", None); base_user.pop("pendingTotpSecret", None); base_user["totpEnabled"] = False; save_data(data); return self.send_json(200, {"ok": True})
+        if path == "/api/privacy/export" and method == "GET":
+            exported = {key: [item for item in data.get(key, []) if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id] for key in WORKSPACE_COLLECTIONS}
+            exported.update({"exportedAt": now(), "workspace": workspace, "profile": data.get("workspaceProfiles", {}).get(workspace_id, {}), "options": data.get("workspaceOptions", {}).get(workspace_id, {})})
+            return self.send_json(200, exported, {"Content-Disposition": f'attachment; filename="miteinander-export-{workspace_id}.json"'})
+        if path == "/api/privacy/workspace" and method == "DELETE":
+            if not user.get("isAdmin") or workspace.get("type") != "private": return self.send_json(403, {"error": "Nur die Administration eines persönlichen Bereichs darf die Löschung anfordern."})
+            payload = self.read_json()
+            if clean(str(payload.get("confirmation") or "")) != workspace["name"]: return self.send_json(400, {"error": "Der Bereichsname wurde nicht korrekt bestätigt."})
+            workspace["deletionRequestedAt"] = now(); workspace["deletionAfter"] = (date.today() + timedelta(days=30)).isoformat(); workspace["status"] = "deletion-pending"
+            audit(workspace_id, user, "deletion-requested", "workspace", workspace_id, "Löschung des Bereichs mit 30 Tagen Widerrufsfrist angefordert"); save_data(data)
+            return self.send_json(200, {"ok": True, "deletionAfter": workspace["deletionAfter"]})
+        if workspace.get("status") in {"paused", "deletion-pending"}:
+            return self.send_json(423, {"error": "Dieser Bereich ist vorübergehend gesperrt."})
         if workspace.get("type") == "shared" and (path.startswith("/api/about/") or path.startswith("/api/contacts") or path in {"/api/family", "/api/person-profile", "/api/profile-photo", "/api/contact-options"}):
             return self.send_json(403, {"error": "Dieser Inhalt gehört in einen persönlichen Bereich."})
         current_profile = data.setdefault("workspaceProfiles", {}).setdefault(workspace_id, {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""})
@@ -827,6 +950,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not filename or filename != Path(filename).name:
                 return self.send_json(404, {"error": "Datei nicht gefunden."})
             attachment = CASE_FILES_DIR / filename
+            if not any(item.get("attachmentFile") == filename and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id for collection in ("cases", "correspondence") for item in data.get(collection, [])):
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
             if not attachment.is_file():
                 return self.send_json(404, {"error": "Datei nicht gefunden."})
             content = attachment.read_bytes()
@@ -846,6 +971,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not filename or filename != Path(filename).name:
                 return self.send_json(404, {"error": "Datei nicht gefunden."})
             attachment = DOCUMENT_FILES_DIR / filename
+            if not any(item.get("attachmentFile") == filename and item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id for item in data.get("documents", [])):
+                return self.send_json(404, {"error": "Datei nicht gefunden."})
             if not attachment.is_file():
                 return self.send_json(404, {"error": "Datei nicht gefunden."})
             content = attachment.read_bytes()
