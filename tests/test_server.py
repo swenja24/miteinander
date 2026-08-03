@@ -54,7 +54,7 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-        self.assertIn('/app.js?v=20260804-2', html)
+        self.assertIn('/app.js?v=20260804-4', html)
         with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260803-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
@@ -285,6 +285,34 @@ class ServerTest(unittest.TestCase):
         past = [task for task in series if task["due"] < date.today().isoformat()]
         self.assertEqual(len(current), 7)
         self.assertEqual(len(past), 1)
+
+    def test_tasks_and_calendar_events_support_quarterly_and_weekly_recurrence(self):
+        admin = self.login(); start = date.today() + timedelta(days=(7 - date.today().weekday()) % 7)
+        _, task = self.call("/api/tasks", "POST", {"title": "Quartalsbericht", "due": start.isoformat(), "status": "planned", "recurrence": "quarterly"}, admin)
+        _, event = self.call("/api/calendarEvents", "POST", {"title": "Jeden Montag", "date": start.isoformat(), "startTime": "10:00", "recurrence": "weekly"}, admin)
+        _, visible = self.call("/api/data", cookie=admin)
+        tasks = sorted(item["due"] for item in visible["tasks"] if item.get("recurrenceSeriesId") == task["recurrenceSeriesId"])
+        events = sorted(item["date"] for item in visible["calendarEvents"] if item.get("source") == "event" and item.get("recurrence") == "weekly" and item["title"] == "Jeden Montag")
+        self.assertEqual(len(tasks), 7); self.assertEqual(len(events), 7)
+        first, second = date.fromisoformat(tasks[0]), date.fromisoformat(tasks[1])
+        self.assertIn((second.month - first.month) % 12, {3})
+        self.assertTrue(all(date.fromisoformat(item).weekday() == start.weekday() for item in events))
+
+    def test_recurring_series_can_be_changed_or_deleted_with_an_explicit_scope(self):
+        admin = self.login(); start = date.today() + timedelta(days=10)
+        _, first = self.call("/api/calendarEvents", "POST", {"title": "Alte Terminserie", "date": start.isoformat(), "recurrence": "weekly"}, admin)
+        _, before = self.call("/api/data", cookie=admin); series = [item for item in before["calendarEvents"] if item.get("source") == "event" and item.get("recurrence") == "weekly" and item["title"] == "Alte Terminserie"]
+        selected = sorted(series, key=lambda item: item["date"])[2]
+        shifted = (date.fromisoformat(selected["date"]) + timedelta(days=1)).isoformat()
+        self.call("/api/calendarEvents/" + selected["id"], "PUT", {"title": "Neue Terminserie", "date": shifted, "_seriesScope": "future"}, admin)
+        _, changed = self.call("/api/data", cookie=admin); same_series = sorted([item for item in changed["calendarEvents"] if item.get("source") == "event" and item.get("recurrence") == "weekly" and item["title"] in {"Alte Terminserie", "Neue Terminserie"}], key=lambda item: item["date"])
+        self.assertEqual(sum(item["title"] == "Alte Terminserie" for item in same_series), 2)
+        self.assertTrue(all(item["title"] == "Neue Terminserie" for item in same_series[2:]))
+        response, deleted = self.call("/api/calendarEvents/" + same_series[2]["id"], "DELETE", {"_seriesScope": "all"}, admin)
+        self.assertGreater(deleted["affected"], 1)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/tasks", "POST", {"title": "Falsche Reihe", "due": start.isoformat(), "recurrence": "weekly", "recurrenceUntil": (start - timedelta(days=1)).isoformat()}, admin)
+        self.assertEqual(error.exception.code, 400)
 
     def test_accounts_and_protected_receipt_upload(self):
         cookie = self.login()

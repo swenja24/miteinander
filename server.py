@@ -139,7 +139,7 @@ def calendar_items_for(user: dict, workspace_id: str) -> list[dict]:
     if user.get("isAdmin") or user.get("permissions", {}).get("cases"):
         case_names = {case["id"]: case.get("title", "Antrag") for case in data.get("cases", []) if case.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id}
         items.extend({"id": entry["id"], "source": "case", "title": f"Frist: {entry.get('subject') or case_names.get(entry.get('caseId'), 'Antrag')}", "date": entry.get("date", ""), "allDay": True, "status": entry.get("deadlineStatus", "open"), "notes": entry.get("notes", "")} for entry in data.get("correspondence", []) if entry.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id and entry.get("eventType") == "deadline" and entry.get("date"))
-    items.extend({"id": event["id"], "source": "event", "title": event.get("title", "Termin"), "date": event.get("date", ""), "startTime": event.get("startTime", ""), "endDate": event.get("endDate", ""), "endTime": event.get("endTime", ""), "allDay": bool(event.get("allDay")), "category": event.get("category", ""), "notes": event.get("notes", "")} for event in data.get("calendarEvents", []) if event.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id and event.get("date"))
+    items.extend({"id": event["id"], "source": "event", "title": event.get("title", "Termin"), "date": event.get("date", ""), "startTime": event.get("startTime", ""), "endDate": event.get("endDate", ""), "endTime": event.get("endTime", ""), "allDay": bool(event.get("allDay")), "category": event.get("category", ""), "notes": event.get("notes", ""), "recurrence": event.get("recurrence", "once")} for event in data.get("calendarEvents", []) if event.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id and event.get("date"))
     return sorted(items, key=lambda item: (item.get("date", ""), item.get("startTime", ""), item.get("title", "")))
 
 
@@ -469,10 +469,11 @@ def recurring_dates(start_value: str, recurrence: str, until_value: str | None) 
 
 
 def next_recurring_date(current: date, recurrence: str) -> date:
+    if recurrence == "daily": return current + timedelta(days=1)
     if recurrence in {"weekly", "biweekly"}:
         return current + timedelta(days=7 if recurrence == "weekly" else 14)
-    if recurrence == "monthly":
-        month = current.month + 1
+    if recurrence in {"monthly", "quarterly"}:
+        month = current.month + (3 if recurrence == "quarterly" else 1)
         year = current.year + (month - 1) // 12
         month = (month - 1) % 12 + 1
         return date(year, month, min(current.day, calendar.monthrange(year, month)[1]))
@@ -505,6 +506,25 @@ def ensure_rolling_tasks(value: dict) -> bool:
             active.append(occurrence)
             existing_dates.add(occurrence["due"])
             changed = True
+    return changed
+
+
+def ensure_rolling_calendar_events(value: dict) -> bool:
+    today_value = date.today().isoformat(); changed = False
+    series_ids = {item.get("recurrenceSeriesId") for item in value.get("calendarEvents", []) if item.get("recurrenceSeriesId") and not item.get("recurrenceUntil")}
+    for series_id in series_ids:
+        series = [item for item in value["calendarEvents"] if item.get("recurrenceSeriesId") == series_id]
+        active = [item for item in series if item.get("date", "") >= today_value]
+        if not series or len(active) >= 7: continue
+        template = max(series, key=lambda item: item.get("date", "")); current = date.fromisoformat(template["date"]); existing_dates = {item.get("date") for item in series}
+        duration = (date.fromisoformat(template.get("endDate") or template["date"]) - current).days
+        while len(active) < 7:
+            current = next_recurring_date(current, template.get("recurrence", "once"))
+            if current.isoformat() in existing_dates: continue
+            occurrence = {key: clean(item) for key, item in template.items() if key not in {"id", "date", "endDate", "createdAt", "updatedAt"}}
+            occurrence.update({"id": str(uuid.uuid4()), "date": current.isoformat(), "createdAt": now(), "generatedAt": now()})
+            if template.get("endDate"): occurrence["endDate"] = (current + timedelta(days=duration)).isoformat()
+            value["calendarEvents"].append(occurrence); active.append(occurrence); existing_dates.add(current.isoformat()); changed = True
     return changed
 
 
@@ -776,7 +796,8 @@ class Handler(SimpleHTTPRequestHandler):
         current_options = data.setdefault("workspaceOptions", {}).setdefault(workspace_id, {"contact": {"categories": []}, "ledger": {"descriptions": [], "categories": []}, "task": {"categories": []}})
         if path == "/api/data" and method == "GET":
             with lock:
-                if ensure_rolling_tasks(data):
+                tasks_changed = ensure_rolling_tasks(data); calendar_changed = ensure_rolling_calendar_events(data)
+                if tasks_changed or calendar_changed:
                     save_data(data)
             scoped = lambda key: [item for item in data.get(key, []) if item.get("workspaceId", data["workspaces"][0]["id"]) == workspace_id]
             workspace_user_ids = {candidate["id"] for candidate in data["users"] if any(m.get("workspaceId") == workspace_id for m in candidate.get("workspaceMemberships", []))}
@@ -1361,6 +1382,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json(400, {"error": "Der Hauptantrag wurde nicht gefunden."})
                 if collection == "tasks":
                     due = str(payload.get("due") or "")
+                    if payload.get("recurrenceUntil") and due and str(payload["recurrenceUntil"]) < due: return self.send_json(400, {"error": "Das Ende der Wiederholung darf nicht vor dem ersten Datum liegen."})
                     if due and due < date.today().isoformat() and not user.get("isAdmin"):
                         return self.send_json(403, {"error": "Vergangene Aufgaben dürfen nur von Administratoren ergänzt werden."})
                     if payload.get("status") not in {None, "open", "planned", "done", "refused"}:
@@ -1381,6 +1403,20 @@ class Handler(SimpleHTTPRequestHandler):
                     data["tasks"][0:0] = created
                     audit(workspace_id, user, "created", "tasks", created[0]["id"], f"Aufgabe „{created[0].get('title', '')}“ angelegt")
                     save_data(data)
+                    return self.send_json(201, created[0])
+                if collection == "calendarEvents":
+                    start_value = str(payload.get("date") or ""); recurrence = str(payload.get("recurrence") or "once")
+                    if payload.get("endDate") and start_value and str(payload["endDate"]) < start_value: return self.send_json(400, {"error": "Das Terminende darf nicht vor dem Beginn liegen."})
+                    if payload.get("recurrenceUntil") and start_value and str(payload["recurrenceUntil"]) < start_value: return self.send_json(400, {"error": "Das Ende der Wiederholung darf nicht vor dem ersten Termin liegen."})
+                    try: dates = recurring_dates(start_value, recurrence, str(payload.get("recurrenceUntil") or "") or None)
+                    except ValueError: return self.send_json(400, {"error": "Das Datum der Wiederholung ist ungültig."})
+                    series_id = str(uuid.uuid4()) if recurrence != "once" else None; created = []
+                    duration = (date.fromisoformat(str(payload.get("endDate") or start_value)) - date.fromisoformat(start_value)).days if start_value else 0
+                    for occurrence_date in dates or [start_value]:
+                        occurrence = {"id": str(uuid.uuid4()), "workspaceId": workspace_id, **clean(payload), "date": occurrence_date, "recurrenceSeriesId": series_id, "createdAt": now(), "createdByUserId": user["id"], "createdByName": user["displayName"]}
+                        if payload.get("endDate"): occurrence["endDate"] = (date.fromisoformat(occurrence_date) + timedelta(days=duration)).isoformat()
+                        created.append(occurrence)
+                    data["calendarEvents"][0:0] = created; audit(workspace_id, user, "created", "calendarEvents", created[0]["id"], f"Termin „{created[0].get('title', '')}“ angelegt"); save_data(data)
                     return self.send_json(201, created[0])
                 receipt_image = payload.pop("receiptImage", None) if collection == "ledger" else None
                 case_file = payload.pop("caseFile", None) if collection in {"cases", "correspondence"} else None
@@ -1417,6 +1453,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(404, {"error": "Eintrag nicht gefunden."})
             if method == "PUT":
                 payload = self.read_json()
+                series_scope = str(payload.pop("_seriesScope", "single")); existing_series = data[collection][index].get("recurrenceSeriesId")
+                if collection in {"tasks", "calendarEvents"} and existing_series and series_scope in {"future", "all"}:
+                    date_field = "due" if collection == "tasks" else "date"; old_date = data[collection][index].get(date_field, ""); new_date = str(payload.get(date_field) or old_date)
+                    if payload.get("recurrenceUntil") and new_date and str(payload["recurrenceUntil"]) < new_date: return self.send_json(400, {"error": "Das Ende der Wiederholung darf nicht vor dem ersten Datum liegen."})
+                    shift = (date.fromisoformat(new_date) - date.fromisoformat(old_date)).days if old_date and new_date else 0
+                    targets = [entry for entry in data[collection] if entry.get("recurrenceSeriesId") == existing_series and (series_scope == "all" or entry.get(date_field, "") >= old_date)]
+                    common = clean({key: value for key, value in payload.items() if key not in {"due", "date", "endDate"}})
+                    for target in targets:
+                        target.update(common)
+                        if shift and target.get(date_field): target[date_field] = (date.fromisoformat(target[date_field]) + timedelta(days=shift)).isoformat()
+                        if collection == "calendarEvents" and shift and target.get("endDate"): target["endDate"] = (date.fromisoformat(target["endDate"]) + timedelta(days=shift)).isoformat()
+                        target["updatedAt"] = now(); target["updatedByUserId"] = user["id"]
+                    audit(workspace_id, user, "updated-series", collection, existing_series, f"{len(targets)} Vorkommnisse einer Serie geändert"); save_data(data)
+                    return self.send_json(200, data[collection][index])
                 if collection == "tasks":
                     existing = data[collection][index]
                     if existing.get("deletedAt"):
@@ -1474,6 +1524,16 @@ class Handler(SimpleHTTPRequestHandler):
                 save_data(data)
                 return self.send_json(200, data[collection][index])
             if method == "DELETE":
+                delete_payload = self.read_json(); series_scope = str(delete_payload.get("_seriesScope") or "single"); selected = data[collection][index]; series_id = selected.get("recurrenceSeriesId")
+                if collection in {"tasks", "calendarEvents"} and series_id and series_scope in {"future", "all"}:
+                    date_field = "due" if collection == "tasks" else "date"; selected_date = selected.get(date_field, "")
+                    targets = [entry for entry in data[collection] if entry.get("recurrenceSeriesId") == series_id and (series_scope == "all" or entry.get(date_field, "") >= selected_date)]
+                    if collection == "tasks" and not user.get("isAdmin"):
+                        for task in targets: task["deletedAt"] = now(); task["deletedByUserId"] = user["id"]; task["deletedByName"] = user["displayName"]
+                        save_data(data); return self.send_json(200, {"ok": True, "pendingAdminConfirmation": True, "affected": len(targets)})
+                    target_ids = {entry["id"] for entry in targets}; data[collection] = [entry for entry in data[collection] if entry["id"] not in target_ids]
+                    audit(workspace_id, user, "deleted-series", collection, series_id, f"{len(targets)} Vorkommnisse einer Serie gelöscht"); save_data(data)
+                    return self.send_json(200, {"ok": True, "affected": len(targets)})
                 if collection == "tasks" and not user.get("isAdmin"):
                     task = data[collection][index]
                     task["deletedAt"] = now()

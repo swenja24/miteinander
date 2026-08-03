@@ -7,7 +7,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 ## Enthalten
 
 - Anträge und Behördenkontakte mit Status und Fristen
-- Aufgaben, Zuständigkeiten und Fälligkeiten
+- Aufgaben, Zuständigkeiten und Fälligkeiten mit täglichen, wöchentlichen, zweiwöchentlichen, monatlichen, vierteljährlichen und jährlichen Wiederholungen
 - Dokumentenregister mit Zuordnung zu Anträgen
 - Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
 - Familienbereich mit beteiligten Personen und Rollen
@@ -19,6 +19,8 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
 - Getrennte persönliche und gemeinsame WG-Bereiche mit einem Login, Bereichsumschalter, eigener Gemeinschaftskasse und gemeinsamen Aufgaben
 - Responsive, tastaturbedienbare Oberfläche
+- Wiederkehrende Kalendertermine mit optionalem Enddatum; ohne Enddatum werden laufend die nächsten sieben Vorkommnisse bereitgehalten
+- Serien lassen sich wahlweise für ein Vorkommnis, ab einem Vorkommnis oder vollständig bearbeiten und löschen
 - Datenschutzbewusstes Feedbackformular für Verbesserungswünsche mit lokaler Sammlung und optionaler E-Mail-Weiterleitung
 
 > Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
