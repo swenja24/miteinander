@@ -51,8 +51,8 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-            self.assertIn('/app.js?v=20260721-4', html)
-        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260721-4") as response:
+        self.assertIn('/app.js?v=20260803-3', html)
+        with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260803-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
 
@@ -75,6 +75,30 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(current["onboardingDismissed"])
         self.assertTrue(any(entry["entity"] == "tasks" for entry in current["auditLog"]))
         self.assertIn("operatorInfo", current)
+
+    def test_calendar_and_ical_respect_source_permissions(self):
+        admin = self.login()
+        _, application = self.call("/api/cases", "POST", {"title": "Pflegeantrag", "status": "submitted"}, admin)
+        self.call("/api/correspondence", "POST", {"caseId": application["id"], "eventType": "deadline", "date": "2026-09-12", "subject": "Entscheidungsfrist"}, admin)
+        self.call("/api/tasks", "POST", {"title": "Medikamente bestellen", "due": "2026-09-11", "status": "planned"}, admin)
+        self.call("/api/calendarEvents", "POST", {"title": "Sommerfest", "date": "2026-09-10", "startTime": "15:00"}, admin)
+        _, calendar_user = self.call("/api/users", "POST", {"username": "kalenderhilfe", "displayName": "Kalenderhilfe", "password": "sicheres-passwort", "role": "Assistenz", "permissions": {"calendar": True, "tasks": True, "cases": False}}, admin)
+        assistant = self.login("kalenderhilfe", "sicheres-passwort")
+        _, visible = self.call("/api/data", cookie=assistant)
+        titles = [item["title"] for item in visible["calendarEvents"]]
+        self.assertIn("Sommerfest", titles)
+        self.assertIn("Medikamente bestellen", titles)
+        self.assertFalse(any("Entscheidungsfrist" in title for title in titles))
+        _, feed = self.call("/api/calendar-feed", "POST", {}, assistant)
+        with urllib.request.urlopen(feed["url"]) as response:
+            ical = response.read().decode()
+        self.assertIn("SUMMARY:Sommerfest", ical)
+        self.assertIn("SUMMARY:Medikamente bestellen", ical)
+        self.assertNotIn("Entscheidungsfrist", ical)
+        self.call("/api/users/" + calendar_user["id"], "PUT", {"displayName": "Kalenderhilfe", "role": "Assistenz", "permissions": {"calendar": False, "tasks": True, "cases": False}}, admin)
+        with self.assertRaises(urllib.error.HTTPError) as revoked_permission:
+            urllib.request.urlopen(feed["url"])
+        self.assertEqual(revoked_permission.exception.code, 403)
 
     def test_important_contacts_are_shared_but_safely_editable(self):
         admin_cookie = self.login()
@@ -277,10 +301,7 @@ class ServerTest(unittest.TestCase):
         }, cookie)
         self.assertEqual(entry["createdByUserId"], initial["currentUser"]["id"])
         self.assertTrue(entry["receiptFile"].endswith(".png"))
-        request = urllib.request.Request(
-            "http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"],
-            headers={"Cookie": cookie},
-        )
+        request = urllib.request.Request("http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"], headers={"Cookie": cookie})
         with urllib.request.urlopen(request) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(response.headers.get_content_type(), "image/png")
@@ -288,6 +309,28 @@ class ServerTest(unittest.TestCase):
             urllib.request.urlopen("http://127.0.0.1:8765/api/receipts/" + entry["receiptFile"])
         self.assertEqual(error.exception.code, 401)
 
+    def test_manual_csv_and_camt_import_preview_deduplication_and_review(self):
+        cookie = self.login()
+        _, initial = self.call("/api/data", cookie=cookie)
+        account_id = initial["accounts"][2]["id"]
+        csv_data = "Buchungstag;Verwendungszweck;Zahlungspartner;Betrag\n01.08.2026;Miete August;Vermietung;-650,00\n02.08.2026;Einkommen;Arbeitgeber;1250,50\n"
+        payload = {"accountId": account_id, "fileName": "umsatz.csv", "fileData": "data:text/csv;base64," + base64.b64encode(csv_data.encode()).decode()}
+        _, preview = self.call("/api/bank-import/preview", "POST", payload, cookie)
+        self.assertEqual(preview["newCount"], 2)
+        _, imported = self.call("/api/bank-import/commit", "POST", payload, cookie)
+        self.assertEqual(imported["imported"], 2)
+        _, duplicate = self.call("/api/bank-import/commit", "POST", payload, cookie)
+        self.assertEqual(duplicate["imported"], 0)
+        self.assertEqual(duplicate["duplicates"], 2)
+        _, visible = self.call("/api/data", cookie=cookie)
+        imported_entries = [entry for entry in visible["ledger"] if entry.get("importBatchId") == imported["batchId"]]
+        self.assertTrue(all(entry["reviewStatus"] == "pending" for entry in imported_entries))
+        _, reviewed = self.call("/api/ledger/" + imported_entries[0]["id"] + "/review", "PUT", {}, cookie)
+        self.assertEqual(reviewed["reviewStatus"], "reviewed")
+        camt = """<?xml version="1.0"?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt><Ntry><Amt Ccy="EUR">29.95</Amt><CdtDbtInd>DBIT</CdtDbtInd><BookgDt><Dt>2026-08-03</Dt></BookgDt><AddtlNtryInf>Telefonrechnung</AddtlNtryInf></Ntry></Stmt></BkToCstmrStmt></Document>"""
+        camt_payload = {"accountId": account_id, "fileName": "kontoauszug.xml", "fileData": "data:application/xml;base64," + base64.b64encode(camt.encode()).decode()}
+        _, camt_result = self.call("/api/bank-import/commit", "POST", camt_payload, cookie)
+        self.assertEqual(camt_result["imported"], 1)
     def test_about_linea_profile_goals_rules_and_comments(self):
         admin_cookie = self.login()
         _, profile = self.call("/api/person-profile", "PUT", {
@@ -539,6 +582,31 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/data", cookie=outsider_cookie, workspace_id=shared["id"])
         self.assertEqual(error.exception.code, 403)
+
+    def test_one_account_can_keep_a_private_area_and_a_shared_wg_separate(self):
+        admin_cookie = self.login()
+        _, helper = self.call("/api/users", "POST", {
+            "username": "maria", "displayName": "Maria", "password": "sicheres-passwort",
+            "role": "Assistenz", "permissions": {"tasks": True, "ledger": True},
+        }, admin_cookie)
+        _, shared = self.call("/api/workspaces", "POST", {
+            "name": "WG Zusammen", "memberUserIds": [helper["id"]],
+        }, admin_cookie)
+        maria_cookie = self.login("maria", "sicheres-passwort")
+        _, private = self.call("/api/workspaces", "POST", {
+            "type": "private", "name": "Marias Bereich", "personName": "Maria",
+        }, maria_cookie, shared["id"])
+        _, private_data = self.call("/api/data", cookie=maria_cookie, workspace_id=private["id"])
+        self.assertEqual(private_data["family"]["person"], "Maria")
+        self.assertEqual(len(private_data["accounts"]), 3)
+        self.call("/api/person-profile", "PUT", {"introduction": "Das ist Marias Profil."}, maria_cookie, private["id"])
+        _, linea_data = self.call("/api/data", cookie=admin_cookie)
+        self.assertNotEqual(linea_data["personProfile"].get("introduction"), "Das ist Marias Profil.")
+        _, maria_shared = self.call("/api/data", cookie=maria_cookie, workspace_id=shared["id"])
+        self.assertEqual(maria_shared["workspace"]["name"], "WG Zusammen")
+        self.assertIn(private["id"], [area["id"] for area in private_data["workspaces"]])
+        self.assertIn(shared["id"], [area["id"] for area in private_data["workspaces"]])
+        self.assertNotIn(private["id"], [area["id"] for area in linea_data["workspaces"]])
 
 
 if __name__ == "__main__": unittest.main()

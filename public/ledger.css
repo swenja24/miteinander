@@ -5,6 +5,9 @@
   margin-bottom: 20px;
 }
 
+.bank-import-note{position:relative;margin-bottom:1rem;padding-right:4rem;border-color:#d6c48f;background:#fffdf5}.bank-import-note p{margin-bottom:0}.bank-import-note .help-btn{position:absolute;right:1rem;top:1rem}.notice-warning{margin:1rem 0;padding:1rem;border-left:5px solid #d18a38;background:#fff8ea;border-radius:8px}.notice-warning p{margin:.35rem 0 0}.bank-preview{max-height:24rem;overflow:auto;border:1px solid #dde3df;border-radius:10px}.bank-preview>div{display:grid;grid-template-columns:7rem minmax(12rem,1fr) 8rem;gap:.5rem;padding:.65rem;border-bottom:1px solid #e6e9e7}.bank-preview>div small{grid-column:2/4;color:#68736e}.bank-preview>div.duplicate{opacity:.55;background:#f1f1ef}.ledger-pending{box-shadow:inset 5px 0 #d18a38}
+@media(max-width:700px){.bank-preview>div{grid-template-columns:1fr}.bank-preview>div small{grid-column:auto}.bank-import-note{padding-right:3.5rem}}
+
 .account-balances .mini-stat strong {
   font-size: 1.15rem;
 }

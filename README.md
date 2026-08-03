@@ -12,7 +12,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
 - Familienbereich mit beteiligten Personen und Rollen
 - Antragsakten mit Ergänzungsanträgen, neutraler Ereignis- und Fristentimeline, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
-- Gemeinsamer Bereich „Über Linea“ mit Profilfoto, mehreren BEI-PDFs, Personenprofil, Zielen, Kommentarverlauf und administrativ freigegebenen Regeln
+- Personalisierter Bereich „Über [Name]“ mit Profilfoto, mehreren BEI-PDFs, Personenprofil, Zielen, Kommentarverlauf und administrativ freigegebenen Regeln
 - Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
 - Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
 - Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
@@ -66,6 +66,16 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen. `APP_BASE_URL` ist die öffentliche HTTPS-Adresse der Anwendung. Die E-Mail enthält bewusst weder Nachrichtentext noch Gesundheitsdaten, sondern nur den Hinweis, dass in Miteinander eine neue Information vorliegt. Ohne SMTP-Konfiguration funktionieren Infobrett, Erwähnungen und Lesebestätigungen weiterhin; lediglich der externe E-Mail-Versand bleibt aus.
 
 Unter „Hilfe & Datenschutz“ nennt die App die verantwortliche Stelle der jeweiligen Installation. Dafür in Arcane `DATA_CONTROLLER_NAME` und `DATA_CONTROLLER_CONTACT` setzen. Der persistente Docker-Datenträger `/app/data` muss regelmäßig verschlüsselt gesichert werden; eine Wiederherstellung sollte vor dem Praxiseinsatz getestet werden.
+
+## Kalender und Handysynchronisation
+
+Der Kalender verbindet eigene Termine, Aufgaben und Antragsfristen, ohne sie doppelt zu speichern. Sichtbar sind nur Quellen, für die der angemeldete Zugang berechtigt ist. Der persönliche iCal-Link übernimmt dieselben Rechte bei jedem Abruf; wird etwa der Zugriff auf Anträge oder den Kalender entzogen, liefert das Abonnement diese Inhalte nicht mehr. Der Link kann in der App jederzeit erneuert oder widerrufen werden und sollte wie ein Passwort behandelt werden. Für einen von außen erreichbaren HTTPS-Link muss `APP_BASE_URL` auf die öffentliche Adresse gesetzt sein.
+
+## Manueller Kontoauszugsimport
+
+Im Kassenbuch können CSV- und CAMT.053/XML-Kontoauszüge einem Konto zugeordnet werden. Der Ablauf ist bewusst manuell: Umsätze im Onlinebanking herunterladen, in Miteinander auswählen, Vorschau prüfen und importieren. Die Datei selbst wird nicht dauerhaft gespeichert. Importierte Umsätze erhalten den Status „zu prüfen“; Kategorie, Beleg und Beschreibung müssen bei Bedarf ergänzt werden. Ein Fingerabdruck aus Konto, Datum, Betrag, Beschreibung und Zahlungspartner verhindert übliche Doppelimporte.
+
+Es besteht keine Verbindung zur Bank und es werden keine Echtzeitdaten abgerufen. Der Stand entspricht ausschließlich der zuletzt importierten Datei. CSV-Spalten unterscheiden sich je nach Bank; mindestens eine Datums- und eine Betragsspalte müssen erkennbar sein. CAMT.053 ist deshalb nach Möglichkeit das robustere Exportformat.
 
 ## Backup und Wiederherstellung
 
