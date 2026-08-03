@@ -10,3 +10,5 @@ Miteinander speichert besonders schutzbedürftige persönliche Daten. Die betrei
 - Änderungsprotokolle bleiben standardmäßig 730 Tage erhalten. `AUDIT_RETENTION_DAYS` ändert diese Frist.
 
 Backups und hochgeladene Dateien benötigen ein eigenes Löschkonzept. Sicherungen sollten verschlüsselt, zugriffsbeschränkt und zeitlich begrenzt aufbewahrt werden. Für Reverse Proxy, Mailanbieter, Hosting und Backup-Speicher ist zu prüfen, ob Auftragsverarbeitungsverträge erforderlich sind.
+
+Verbesserungswünsche werden installationsweit gespeichert und sind für die Betreiberverwaltung sichtbar. Sie enthalten Anzeigename, Zeitpunkt, Kategorie und Nachricht, aber keine fachlichen Bereichsinhalte. Nutzende werden aufgefordert, dort keine personenbezogenen oder medizinischen Daten einzutragen.

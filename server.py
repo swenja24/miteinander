@@ -37,6 +37,7 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "miteinander@localhost")
 SMTP_TLS = os.getenv("SMTP_TLS", "true").lower() not in {"0", "false", "no"}
+DEVELOPER_CONTACT_EMAIL = os.getenv("DEVELOPER_CONTACT_EMAIL", "")
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
 MAX_BODY = 8_000_000
 AUDIT_RETENTION_DAYS = max(30, int(os.getenv("AUDIT_RETENTION_DAYS", "730")))
@@ -65,7 +66,7 @@ def empty_data() -> dict:
         "cases": [], "correspondence": [], "tasks": [], "calendarEvents": [], "documents": [], "messages": [], "ledger": [],
         "announcements": [], "topicComments": [],
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [], "auditLog": [], "calendarFeeds": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [], "auditLog": [], "calendarFeeds": [], "developerFeedback": [],
         "workspaceProfiles": {}, "workspaceOptions": {},
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
         "ledgerOptions": {"descriptions": [], "categories": []},
@@ -179,7 +180,7 @@ def load_data() -> dict:
     changed = False
     for key, default in {
         "personProfile": {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""},
-        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [], "calendarEvents": [], "calendarFeeds": [],
+        "goals": [], "rules": [], "aboutComments": [], "importantContacts": [], "beis": [], "routinePlans": [], "invitations": [], "calendarEvents": [], "calendarFeeds": [], "developerFeedback": [],
         "announcements": [], "topicComments": [], "auditLog": [],
         "workspaceProfiles": {}, "workspaceOptions": {},
         "contactOptions": {"categories": ["Eltern / Familie", "Fahrdienst / Busunternehmen", "WfB / Arbeit", "Ärzt*innen", "Therapie", "Pflege", "Behörde", "Wohnen", "Notfallkontakt", "Sonstiges"]},
@@ -556,6 +557,18 @@ def send_notification_email(recipient: str) -> None:
         print(f"E-Mail-Benachrichtigung fehlgeschlagen: {error}")
 
 
+def send_feedback_email(feedback: dict) -> None:
+    if not SMTP_HOST or not DEVELOPER_CONTACT_EMAIL: return
+    message = EmailMessage(); message["Subject"] = f"Miteinander-Feedback: {feedback['category']}"; message["From"] = SMTP_FROM; message["To"] = DEVELOPER_CONTACT_EMAIL
+    message.set_content(f"Neuer Verbesserungswunsch von {feedback['createdByName']}\n\nKategorie: {feedback['category']}\n\n{feedback['message']}\n\nIn der Betreiberverwaltung kann das Feedback gesammelt eingesehen werden.")
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as client:
+            if SMTP_TLS: client.starttls()
+            if SMTP_USER: client.login(SMTP_USER, SMTP_PASSWORD)
+            client.send_message(message)
+    except Exception as error: print(f"Feedback-E-Mail fehlgeschlagen: {error}")
+
+
 def notify_users(author_id: str, mentions: list[str], notify_all: bool = False, workspace_id: str | None = None) -> None:
     for recipient in data.get("users", []):
         if workspace_id and not any(m.get("workspaceId") == workspace_id for m in recipient.get("workspaceMemberships", [])): continue
@@ -700,7 +713,7 @@ class Handler(SimpleHTTPRequestHandler):
             for area in data.get("workspaces", []):
                 memberships = [candidate for candidate in data.get("users", []) if any(item.get("workspaceId") == area["id"] for item in candidate.get("workspaceMemberships", []))]
                 summaries.append({"id": area["id"], "name": area["name"], "type": area.get("type"), "createdAt": area.get("createdAt"), "memberCount": len(memberships), "status": area.get("status", "active")})
-            return self.send_json(200, {"workspaces": summaries, "users": len(data.get("users", []))})
+            return self.send_json(200, {"workspaces": summaries, "users": len(data.get("users", [])), "feedback": data.get("developerFeedback", [])[:200]})
         operator_parts = path.strip("/").split("/")
         if len(operator_parts) == 4 and operator_parts[:2] == ["api", "operator"] and operator_parts[3] == "status" and method == "PUT":
             if not base_user.get("isSystemAdmin"): return self.send_json(403, {"error": "Keine Betreiberberechtigung."})
@@ -741,7 +754,7 @@ class Handler(SimpleHTTPRequestHandler):
             exported.update({"exportedAt": now(), "workspace": workspace, "profile": data.get("workspaceProfiles", {}).get(workspace_id, {}), "options": data.get("workspaceOptions", {}).get(workspace_id, {})})
             return self.send_json(200, exported, {"Content-Disposition": f'attachment; filename="miteinander-export-{workspace_id}.json"'})
         if path == "/api/privacy/workspace" and method == "DELETE":
-            if not user.get("isAdmin") or workspace.get("type") != "private": return self.send_json(403, {"error": "Nur die Administration eines persönlichen Bereichs darf die Löschung anfordern."})
+            if not user.get("isAdmin"): return self.send_json(403, {"error": "Nur die Administration dieses Bereichs darf die Löschung anfordern."})
             payload = self.read_json()
             if clean(str(payload.get("confirmation") or "")) != workspace["name"]: return self.send_json(400, {"error": "Der Bereichsname wurde nicht korrekt bestätigt."})
             workspace["deletionRequestedAt"] = now(); workspace["deletionAfter"] = (date.today() + timedelta(days=30)).isoformat(); workspace["status"] = "deletion-pending"
@@ -749,6 +762,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(200, {"ok": True, "deletionAfter": workspace["deletionAfter"]})
         if workspace.get("status") in {"paused", "deletion-pending"}:
             return self.send_json(423, {"error": "Dieser Bereich ist vorübergehend gesperrt."})
+        if path == "/api/developer-feedback" and method == "POST":
+            payload = self.read_json(); message = clean(str(payload.get("message") or "")); category = clean(str(payload.get("category") or "Verbesserung"))
+            if len(message) < 10: return self.send_json(400, {"error": "Bitte beschreibe deinen Wunsch mit mindestens 10 Zeichen."})
+            if len(message) > 4000: return self.send_json(400, {"error": "Der Text darf höchstens 4.000 Zeichen enthalten."})
+            feedback = {"id": str(uuid.uuid4()), "category": category, "message": message, "createdAt": now(), "createdByUserId": base_user["id"], "createdByName": base_user["displayName"], "workspaceType": workspace.get("type"), "status": "new", "emailSent": bool(SMTP_HOST and DEVELOPER_CONTACT_EMAIL)}
+            data.setdefault("developerFeedback", []).insert(0, feedback); save_data(data)
+            if feedback["emailSent"]: threading.Thread(target=send_feedback_email, args=(feedback,), daemon=True).start()
+            return self.send_json(201, {"ok": True, "emailSent": feedback["emailSent"]})
         if workspace.get("type") == "shared" and (path.startswith("/api/about/") or path.startswith("/api/contacts") or path in {"/api/family", "/api/person-profile", "/api/profile-photo", "/api/contact-options"}):
             return self.send_json(403, {"error": "Dieser Inhalt gehört in einen persönlichen Bereich."})
         current_profile = data.setdefault("workspaceProfiles", {}).setdefault(workspace_id, {"introduction": "", "strengths": "", "supportNeeds": "", "beiSummary": "", "wishes": ""})
@@ -841,6 +862,7 @@ class Handler(SimpleHTTPRequestHandler):
             if method == "POST" and not target_workspace_id:
                 payload = self.read_json(); workspace_type = str(payload.get("type") or "shared")
                 if workspace_type not in {"private", "shared"}: return self.send_json(400, {"error": "Ungültiger Bereichstyp."})
+                if workspace_type == "private": return self.send_json(403, {"error": "Persönliche Bereiche werden ausschließlich über eine Einladung der Betreiberverwaltung angelegt."})
                 if workspace_type == "shared" and not user.get("isAdmin"): return self.send_json(403, {"error": "Nur Administrator*innen dürfen gemeinsame Bereiche anlegen."})
                 person_name = clean(str(payload.get("personName") or base_user.get("displayName") or "")) if workspace_type == "private" else ""
                 name = clean(str(payload.get("name") or (f"{person_name}s Bereich" if person_name else "")))

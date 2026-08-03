@@ -19,6 +19,7 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 - Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
 - Getrennte persönliche und gemeinsame WG-Bereiche mit einem Login, Bereichsumschalter, eigener Gemeinschaftskasse und gemeinsamen Aufgaben
 - Responsive, tastaturbedienbare Oberfläche
+- Datenschutzbewusstes Feedbackformular für Verbesserungswünsche mit lokaler Sammlung und optionaler E-Mail-Weiterleitung
 
 > Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
 
@@ -39,6 +40,8 @@ Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe i
 Die Daten liegen im Docker-Volume `miteinander_data`. Der Container kann neu gebaut oder aktualisiert werden, ohne die Daten zu verlieren.
 
 Beim ersten Start der Mehrbereichsversion werden vorhandene Daten automatisch dem bisherigen persönlichen Bereich zugeordnet. Gemeinsame WG-Bereiche werden anschließend im Familien-Steuerungszentrum angelegt. Inhalte werden nicht zwischen Bereichen kopiert; Aufgaben, Buchungen und Infobrett-Einträge gehören immer genau zu dem Bereich, in dem sie erstellt wurden.
+
+Persönliche Bereiche entstehen ausschließlich durch eine Einladung in der Betreiberverwaltung. Assistenzkonten können deshalb nicht versehentlich eigene persönliche Bereiche anlegen. Bereichsadministrator*innen können den jeweils aktiven persönlichen oder gemeinsamen Bereich unter „Hilfe & Datenschutz“ mit einer 30-tägigen Sicherheitsfrist löschen lassen; die Betreiberverwaltung kann diese Löschung innerhalb der Frist widerrufen.
 
 ## Automatische Images auf GHCR
 
@@ -64,6 +67,8 @@ Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen
 ### Optionale E-Mail-Benachrichtigungen
 
 Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen. `APP_BASE_URL` ist die öffentliche HTTPS-Adresse der Anwendung. Die E-Mail enthält bewusst weder Nachrichtentext noch Gesundheitsdaten, sondern nur den Hinweis, dass in Miteinander eine neue Information vorliegt. Ohne SMTP-Konfiguration funktionieren Infobrett, Erwähnungen und Lesebestätigungen weiterhin; lediglich der externe E-Mail-Versand bleibt aus.
+
+Verbesserungswünsche werden immer lokal in der JSON-Datei gesammelt und sind nur in der Betreiberansicht sichtbar. Wenn `DEVELOPER_CONTACT_EMAIL` und SMTP konfiguriert sind, wird zusätzlich eine E-Mail an diese Adresse verschickt. Das Formular weist darauf hin, keine personenbezogenen, medizinischen oder dokumentbezogenen Inhalte einzutragen.
 
 Unter „Hilfe & Datenschutz“ nennt die App die verantwortliche Stelle der jeweiligen Installation. Dafür in Arcane `DATA_CONTROLLER_NAME` und `DATA_CONTROLLER_CONTACT` setzen. Der persistente Docker-Datenträger `/app/data` muss regelmäßig verschlüsselt gesichert werden; eine Wiederherstellung sollte vor dem Praxiseinsatz getestet werden.
 

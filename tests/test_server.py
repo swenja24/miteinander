@@ -54,7 +54,7 @@ class ServerTest(unittest.TestCase):
         with urllib.request.urlopen("http://127.0.0.1:8765/") as response:
             html = response.read().decode()
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
-        self.assertIn('/app.js?v=20260803-4', html)
+        self.assertIn('/app.js?v=20260804-2', html)
         with urllib.request.urlopen("http://127.0.0.1:8765/app.js?v=20260803-2") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-cache, no-store, must-revalidate")
             self.assertIn("Rechnung fotografieren oder hochladen", response.read().decode())
@@ -372,6 +372,7 @@ class ServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/about/beis", "POST", {"title": "Nicht erlaubt"}, helper_cookie)
         self.assertEqual(error.exception.code, 403)
+
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.call("/api/person-profile", "PUT", {"introduction": "Nicht erlaubt"}, helper_cookie)
         self.assertEqual(error.exception.code, 403)
@@ -385,6 +386,16 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(comment["createdByName"], "Assistenz About")
         _, approved = self.call("/api/about/rules/" + rule["id"], "PUT", {"approvalStatus": "approved"}, admin_cookie)
         self.assertEqual(approved["approvalStatus"], "approved")
+
+    def test_admin_can_request_deletion_of_a_shared_area(self):
+        admin = self.login()
+        _, shared = self.call("/api/workspaces", "POST", {"name": "Versehentlicher WG-Bereich"}, admin)
+        _, result = self.call("/api/privacy/workspace", "DELETE", {"confirmation": shared["name"]}, admin, shared["id"])
+        self.assertTrue(result["ok"])
+        _, operator = self.call("/api/operator", cookie=admin)
+        summary = next(item for item in operator["workspaces"] if item["id"] == shared["id"])
+        self.assertEqual(summary["status"], "deletion-pending")
+        self.call(f"/api/operator/{shared['id']}/status", "PUT", {"status": "active"}, admin)
 
     def test_only_administrators_can_rename_accounts(self):
         admin_cookie = self.login()
@@ -586,7 +597,7 @@ class ServerTest(unittest.TestCase):
             self.call("/api/data", cookie=outsider_cookie, workspace_id=shared["id"])
         self.assertEqual(error.exception.code, 403)
 
-    def test_one_account_can_keep_a_private_area_and_a_shared_wg_separate(self):
+    def test_assistance_cannot_create_an_accidental_private_area(self):
         admin_cookie = self.login()
         _, helper = self.call("/api/users", "POST", {
             "username": "maria", "displayName": "Maria", "password": "sicheres-passwort",
@@ -596,20 +607,14 @@ class ServerTest(unittest.TestCase):
             "name": "WG Zusammen", "memberUserIds": [helper["id"]],
         }, admin_cookie)
         maria_cookie = self.login("maria", "sicheres-passwort")
-        _, private = self.call("/api/workspaces", "POST", {
-            "type": "private", "name": "Marias Bereich", "personName": "Maria",
-        }, maria_cookie, shared["id"])
-        _, private_data = self.call("/api/data", cookie=maria_cookie, workspace_id=private["id"])
-        self.assertEqual(private_data["family"]["person"], "Maria")
-        self.assertEqual(len(private_data["accounts"]), 3)
-        self.call("/api/person-profile", "PUT", {"introduction": "Das ist Marias Profil."}, maria_cookie, private["id"])
-        _, linea_data = self.call("/api/data", cookie=admin_cookie)
-        self.assertNotEqual(linea_data["personProfile"].get("introduction"), "Das ist Marias Profil.")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.call("/api/workspaces", "POST", {
+                "type": "private", "name": "Lineas Assistenz", "personName": "Maria",
+            }, maria_cookie, shared["id"])
+        self.assertEqual(error.exception.code, 403)
         _, maria_shared = self.call("/api/data", cookie=maria_cookie, workspace_id=shared["id"])
         self.assertEqual(maria_shared["workspace"]["name"], "WG Zusammen")
-        self.assertIn(private["id"], [area["id"] for area in private_data["workspaces"]])
-        self.assertIn(shared["id"], [area["id"] for area in private_data["workspaces"]])
-        self.assertNotIn(private["id"], [area["id"] for area in linea_data["workspaces"]])
+        self.assertNotIn("Lineas Assistenz", [area["name"] for area in maria_shared["workspaces"]])
 
     def test_operator_can_invite_an_independent_person_without_seeing_content(self):
         admin = self.login()
@@ -669,6 +674,18 @@ class ServerTest(unittest.TestCase):
         _, exported = self.call("/api/privacy/export", cookie=secured_cookie)
         self.assertEqual(exported["workspace"]["id"], exported["profile"] is not None and exported["workspace"]["id"])
         self.call("/api/security/totp", "DELETE", {}, secured_cookie)
+
+
+    def test_developer_feedback_is_collected_without_workspace_content(self):
+        admin = self.login()
+        _, submitted = self.call("/api/developer-feedback", "POST", {
+            "category": "function", "message": "Ziele aus einem BEI als prüfbare Vorschläge übernehmen.",
+        }, admin)
+        self.assertTrue(submitted["ok"])
+        _, operator = self.call("/api/operator", cookie=admin)
+        feedback = next(item for item in operator["feedback"] if "BEI" in item["message"])
+        self.assertNotIn("workspaceId", feedback)
+        self.assertNotIn("personName", feedback)
 
 
 if __name__ == "__main__": unittest.main()
