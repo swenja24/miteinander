@@ -3,12 +3,13 @@ import uuid
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 
 from core.models import DeveloperFeedback, Record, Workspace
-from core.services import allowed, audit, create_record, membership_context, parse_json, record_dict, update_record, validate_and_store_file
+from core.services import allowed, audit, create_record, membership_context, parse_json, record_dict, update_record, valid_email_or_empty, validate_and_store_file
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ def about_collection(request, collection, item_id=None):
                 return JsonResponse({"error": "Keine Berechtigung für diese Löschung."}, status=403)
             if collection in {"goals", "rules"}:
                 Record.objects.filter(workspace=workspace, kind="about_comment", parent_id=record.id).delete()
+                Record.objects.filter(workspace=workspace, kind="topic_comment", parent_id=record.id).delete()
             _remove(record)
             audit(workspace, request.user, "deleted", collection, item_id, f"{collection}: Eintrag gelöscht")
             return JsonResponse({"ok": True})
@@ -97,6 +99,8 @@ def contacts(request, item_id=None):
         payload = parse_json(request)
         if not str(payload.get("name") or "").strip():
             return JsonResponse({"error": "Bitte gib einen Namen oder eine Organisation an."}, status=400)
+        if "email" in payload:
+            payload["email"] = valid_email_or_empty(payload.get("email"))
         record = create_record(workspace, "contact", payload, request.user)
         return JsonResponse(record_dict(record), status=201)
     record = _item(workspace, "contact", item_id)
@@ -105,7 +109,10 @@ def contacts(request, item_id=None):
     if not (membership.is_admin or record.created_by_id == request.user.id):
         return JsonResponse({"error": "Du kannst nur eigene Kontakte bearbeiten oder löschen."}, status=403)
     if request.method == "PUT":
-        update_record(record, parse_json(request), request.user)
+        payload = parse_json(request)
+        if "email" in payload:
+            payload["email"] = valid_email_or_empty(payload.get("email"))
+        update_record(record, payload, request.user)
         return JsonResponse(record_dict(record))
     if request.method == "DELETE":
         record.delete()
@@ -202,7 +209,7 @@ def topic_comments(request, item_id=None):
         if not target_kind or not Record.objects.filter(workspace=workspace, kind=target_kind, pk=payload.get("targetId")).exists():
             return JsonResponse({"error": "Das Thema wurde nicht gefunden."}, status=400)
         record = create_record(workspace, "topic_comment", payload, request.user)
-        _notify(workspace, request.user, payload.get("text", ""), "Neuer Beitrag in Miteinander")
+        _notify(workspace, request.user, payload.get("text", ""), "Neuer Beitrag in Miteinander", required or "")
         return JsonResponse(record_dict(record), status=201)
     record = _item(workspace, "topic_comment", item_id)
     if not record:
@@ -215,24 +222,29 @@ def topic_comments(request, item_id=None):
 
 def developer_feedback(request):
     workspace, _ = membership_context(request)
+    rate_key = f"developer-feedback:{request.user.id}"
+    current_count = int(cache.get(rate_key, 0))
+    if current_count >= 10:
+        return JsonResponse({"error": "Du hast bereits mehrere Vorschläge gesendet. Bitte versuche es später erneut."}, status=429)
     payload = parse_json(request)
     message = str(payload.get("message") or "").strip()
     category = str(payload.get("category") or "other")[:100]
     if len(message) < 10 or len(message) > 4000:
         return JsonResponse({"error": "Der Vorschlag muss zwischen 10 und 4.000 Zeichen lang sein."}, status=400)
     item = DeveloperFeedback.objects.create(category=category, message=message, created_by=request.user, created_by_name=request.user.label, workspace_type=workspace.type)
+    cache.set(rate_key, current_count + 1, 3600)
     if settings.DEVELOPER_CONTACT_EMAIL and settings.EMAIL_HOST:
         from core.tasks import send_feedback_email
         transaction.on_commit(lambda: _enqueue(send_feedback_email, str(item.id)))
     return JsonResponse({"ok": True, "id": str(item.id)}, status=201)
 
 
-def _notify(workspace, author, text, subject):
+def _notify(workspace, author, text, subject, required_permission=""):
     usernames = set(re.findall(r"(?<!\w)@([\w.@+-]{3,150})", str(text)))
     if not settings.EMAIL_HOST:
         return
     from core.tasks import send_workspace_notification
-    transaction.on_commit(lambda: _enqueue(send_workspace_notification, str(workspace.id), str(author.id), sorted(usernames), subject))
+    transaction.on_commit(lambda: _enqueue(send_workspace_notification, str(workspace.id), str(author.id), sorted(usernames), subject, required_permission))
 
 
 def _enqueue(task, *args):

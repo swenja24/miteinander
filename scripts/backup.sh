@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 BACKUP_DIR=${1:-./backups}
 STAMP=$(date +%Y%m%d-%H%M%S)

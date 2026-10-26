@@ -30,8 +30,9 @@ class Command(BaseCommand):
             raise CommandError("Name, leistungsberechtigte Person und Bereichsname dürfen nicht leer sein.")
         if not password:
             raise CommandError("BOOTSTRAP_ADMIN_PASSWORD fehlt. Der erste Zugang wurde nicht angelegt.")
+        candidate = User(username=username, display_name=display_name)
         try:
-            validate_password(password)
+            validate_password(password, candidate)
         except ValidationError as error:
             raise CommandError(" ".join(error.messages)) from error
         with transaction.atomic():

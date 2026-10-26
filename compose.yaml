@@ -30,6 +30,12 @@ services:
     image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
     pull_policy: always
     restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     ports:
       - "${HOST_PORT:-3080}:8000"
     environment: &app_environment
@@ -64,7 +70,9 @@ services:
       AWS_S3_REGION_NAME: "${AWS_S3_REGION_NAME:-eu-central-1}"
       COOKIE_SECURE: "${COOKIE_SECURE:-true}"
       SECURE_SSL_REDIRECT: "${SECURE_SSL_REDIRECT:-true}"
+      SESSION_COOKIE_AGE_SECONDS: "${SESSION_COOKIE_AGE_SECONDS:-28800}"
       AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-730}"
+      WORKSPACE_STORAGE_LIMIT_MB: "${WORKSPACE_STORAGE_LIMIT_MB:-2048}"
       TZ: "Europe/Berlin"
     volumes:
       - miteinander_data:/app/data
@@ -78,6 +86,12 @@ services:
     image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
     pull_policy: always
     restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     command: ["celery", "-A", "config", "worker", "--loglevel=INFO", "--concurrency=2"]
     environment: *app_environment
     volumes:
@@ -94,6 +108,12 @@ services:
     image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
     pull_policy: always
     restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     command: ["celery", "-A", "config", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     environment: *app_environment
     depends_on:

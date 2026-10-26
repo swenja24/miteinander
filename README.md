@@ -26,6 +26,8 @@ Fachlich unterschiedliche Detailfelder bleiben flexibel als JSON in ihrem jeweil
 - Einladungslinks, je Bereich pausierbare Zugänge, Modulrechte, Zwei-Faktor-Anmeldung und Änderungsprotokoll
 - vollständiger Bereichsexport als ZIP mit JSON-Daten und Dateien
 
+Statische Dateien erhalten beim Containerbau automatisch inhaltsabhängige Dateinamen. Dadurch laden Browser nach einem Update zuverlässig die neue Oberfläche; der Service Worker nutzt online immer die aktuelle Fassung und hält nur einen Offline-Rückfall vor.
+
 ## Deployment mit Arcane
 
 1. Bei einer bestehenden Installation den vorhandenen Arcane-Stack aktualisieren
@@ -62,6 +64,8 @@ Die Dienste sind:
 ## Update und Rollback
 
 Bei jedem Push auf `main` prüft GitHub Actions den Code, baut ein Image und veröffentlicht `latest` sowie einen unveränderlichen `sha-…`-Tag in GHCR. Für einen kontrollierten Produktivbetrieb empfiehlt sich in Arcane ein konkreter `IMAGE_TAG=sha-…`. Vor einem Update immer ein Backup erstellen.
+
+Die Prüfung umfasst Django-Tests, Syntax- und Migrationschecks, einen Abgleich bekannter Python-Sicherheitslücken sowie eine statische Sicherheitsanalyse. Dependabot kontrolliert Python-, Docker- und GitHub-Actions-Abhängigkeiten wöchentlich.
 
 Für ein Update Image und Stack neu bereitstellen. Django-Migrationen laufen vor dem Start von Gunicorn. Für ein Rollback den vorherigen `sha-…`-Tag verwenden. Ein Datenbankschema lässt sich nicht in jedem Fall durch einen reinen Image-Rollback zurückdrehen; deshalb gehört das Backup zwingend zum Updateablauf.
 
@@ -102,6 +106,8 @@ Im Verzeichnis mit `compose.yaml`:
 
 Das Backupskript erzeugt zusätzlich eine SHA-256-Prüfsumme. `restore-test.sh` stellt den Datenbankdump in einem kurzlebigen PostgreSQL-Container wieder her und prüft das Dateiarchiv, ohne den laufenden Stack zu verändern. Backups müssen verschlüsselt, zugriffsbeschränkt und mit einer dokumentierten Aufbewahrungsfrist gespeichert werden.
 
+Das Skript legt lokale Backupdateien nur für den ausführenden Systembenutzer lesbar an, verschlüsselt sie aber nicht selbst. Speichere sie daher ausschließlich auf einem verschlüsselten Datenträger oder verschlüssele sie unmittelbar mit dem Backup-System deines Proxmox-Servers.
+
 Bei Verwendung eines S3-kompatiblen Objektspeichers muss dessen Inhalt zusätzlich mit den Werkzeugen des Speicheranbieters gesichert und wiederherstellbar getestet werden.
 
 Für einen S3-kompatiblen Speicher werden in `.env` `AWS_STORAGE_BUCKET_NAME`,
@@ -127,6 +133,14 @@ Tests:
 ```bash
 SECURE_SSL_REDIRECT=false COOKIE_SECURE=false .venv/bin/python manage.py test core.tests
 ```
+
+Hat eine Person ihr Passwort vergessen, kann ausschließlich die betreibende Stelle mit Serverzugriff ein neues setzen:
+
+```bash
+docker compose exec miteinander python manage.py changepassword BENUTZERNAME
+```
+
+Bereichsadministrator*innen dürfen aus Gründen der Mandantentrennung keine globalen Passwörter anderer Personen ändern.
 
 ## Sicherheit und Datenschutz
 

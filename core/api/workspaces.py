@@ -1,5 +1,6 @@
-import io
 import json
+import shutil
+import tempfile
 import uuid
 import zipfile
 from datetime import timedelta
@@ -8,12 +9,12 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.db import IntegrityError, transaction
+from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 
 from core.models import AuditEvent, DeveloperFeedback, Invitation, ManagedFile, Member, Membership, Record, Workspace, WorkspaceOptions, WorkspaceProfile
-from core.services import ADMIN_ROLES, COLLECTION_BY_KIND, KIND_BY_COLLECTION, PERMISSION_KEYS, allowed, audit, calendar_items, create_record, create_workspace, ensure_rolling, ensure_workspace_defaults, member_dict, membership_context, parse_json, permissions, profile_dict, record_dict, safe_user
+from core.services import ADMIN_ROLES, COLLECTION_BY_KIND, KIND_BY_COLLECTION, PERMISSION_KEYS, allowed, audit, calendar_items, create_record, create_workspace, ensure_rolling, ensure_workspace_defaults, member_dict, membership_context, parse_json, permissions, profile_dict, record_dict, safe_user, valid_email_or_empty
 
 
 User = get_user_model()
@@ -66,7 +67,7 @@ def data_view(request):
     for current in memberships:
         if membership.is_admin:
             visible_users.append(safe_user(current.user, current, self_view=current.user_id == request.user.id))
-        elif current.user.is_active:
+        elif current.access_status == "active" and current.user.is_active and current.user.access_status == "active":
             visible_users.append({"id": str(current.user_id), "displayName": current.user.label, "username": current.user.username})
     invitation_values = []
     if membership.is_admin:
@@ -82,7 +83,7 @@ def data_view(request):
     value = {
         "family": {"name": workspace.name, "person": workspace.person_name},
         "workspace": _workspace_dict(workspace),
-        "workspaces": [_workspace_dict(item.workspace) for item in Membership.objects.filter(user=request.user, access_status="active").select_related("workspace")],
+        "workspaces": [_workspace_dict(item.workspace) for item in Membership.objects.filter(user=request.user, access_status="active", workspace__status="active").select_related("workspace")],
         "personProfile": profile_dict(profile) if workspace.type == Workspace.Type.PRIVATE else {},
         "goals": grouped["goals"] if workspace.type == Workspace.Type.PRIVATE else [],
         "rules": grouped["rules"] if workspace.type == Workspace.Type.PRIVATE else [],
@@ -136,20 +137,33 @@ def create_workspace_view(request):
     return JsonResponse(_workspace_dict(workspace), status=201)
 
 
+@transaction.atomic
 def workspace_membership_view(request, workspace_id):
     workspace, actor = membership_context(request)
     if workspace.id != workspace_id or not actor.is_admin:
         return JsonResponse({"error": "Bereich nicht gefunden."}, status=404)
+    workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
+    actor = Membership.objects.select_for_update().filter(pk=actor.pk, access_status="active").first()
+    if not actor or not actor.is_admin:
+        return JsonResponse({"error": "Keine Administrationsberechtigung."}, status=403)
     payload = parse_json(request)
-    target = Membership.objects.filter(workspace=workspace, user_id=payload.get("userId")).select_related("user").first()
+    target = Membership.objects.select_for_update().filter(workspace=workspace, user_id=payload.get("userId")).select_related("user").first()
     if not target:
         return JsonResponse({"error": "Die Person gehört nicht zu diesem Bereich."}, status=404)
     if request.method == "DELETE":
         if target.user_id == request.user.id:
             return JsonResponse({"error": "Die eigene Mitgliedschaft kann hier nicht entfernt werden."}, status=400)
-        name = target.user.label
+        target_user = target.user
+        target_user_id = target.user_id
+        name = target_user.label
+        member = target.member
         target.delete()
-        audit(workspace, request.user, "deleted", "workspace-membership", payload.get("userId"), f"Mitgliedschaft von {name} entfernt")
+        if member and not member.memberships.exists() and member.user_id:
+            member.user = None
+            member.save(update_fields=("user",))
+        audit(workspace, request.user, "deleted", "workspace-membership", target_user_id, f"Mitgliedschaft von {name} entfernt")
+        if not target_user.is_system_admin and not target_user.workspace_memberships.exists():
+            target_user.delete()
         return JsonResponse({"ok": True})
     next_admin = bool(payload.get("isAdmin", target.is_admin))
     if target.is_admin and not next_admin and workspace.memberships.filter(is_admin=True, access_status="active").count() <= 1:
@@ -162,31 +176,52 @@ def workspace_membership_view(request, workspace_id):
     return JsonResponse(safe_user(target.user, target, self_view=target.user_id == request.user.id))
 
 
+@transaction.atomic
 def user_view(request, user_id=None):
     workspace, actor = membership_context(request)
     if not actor.is_admin:
         return JsonResponse({"error": "Nur Administrator*innen dürfen Zugänge verwalten."}, status=403)
+    workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
+    actor = Membership.objects.select_for_update().filter(pk=actor.pk, access_status="active").first()
+    if not actor or not actor.is_admin:
+        return JsonResponse({"error": "Keine Administrationsberechtigung."}, status=403)
     if request.method == "POST" and user_id is None:
         payload = parse_json(request)
-        username = str(payload.get("username") or "").strip().lower()[:150]
+        username = str(payload.get("username") or "").strip().lower()
         password = str(payload.get("password") or "")
-        if len(username) < 3 or User.objects.filter(username__iexact=username).exists():
+        if len(username) < 3 or len(username) > 150 or User.objects.filter(username__iexact=username).exists():
             return JsonResponse({"error": "Der Benutzername ist zu kurz oder bereits vergeben."}, status=400)
+        if len(password) > 1024:
+            return JsonResponse({"error": "Das Passwort ist zu lang."}, status=400)
+        display_name = str(payload.get("displayName") or username).strip()[:200]
+        email = valid_email_or_empty(payload.get("notificationEmail"))
+        candidate = User(username=username, display_name=display_name, email=email)
         try:
-            validate_password(password)
+            validate_password(password, candidate)
         except ValidationError as error:
             return JsonResponse({"error": " ".join(error.messages)}, status=400)
         role = str(payload.get("role") or "Angehörige")[:100]
         is_admin = role in ADMIN_ROLES
-        user = User.objects.create_user(username=username, password=password, display_name=str(payload.get("displayName") or username)[:250], notification_email=str(payload.get("notificationEmail") or ""))
         member = None
         member_id = payload.get("memberId")
         if member_id:
-            member = Member.objects.filter(pk=member_id, home_workspace=workspace).first()
+            member = Member.objects.select_for_update().filter(pk=member_id, home_workspace=workspace).first()
+            if not member:
+                return JsonResponse({"error": "Das ausgewählte Teamprofil wurde nicht gefunden."}, status=400)
+            if member.user_id:
+                return JsonResponse({"error": "Dieses Teamprofil ist bereits mit einem Zugang verknüpft."}, status=409)
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(username=username, password=password, display_name=display_name, email=email, notification_email=email)
+        except IntegrityError:
+            return JsonResponse({"error": "Der Benutzername ist bereits vergeben."}, status=409)
+        if member:
+            member.user = user
+            member.save(update_fields=("user",))
         membership = Membership.objects.create(workspace=workspace, user=user, member=member, role=role, is_admin=is_admin, permissions=permissions(payload.get("permissions"), full=is_admin))
         audit(workspace, request.user, "created", "user", user.id, f"Zugang für {user.label} angelegt")
         return JsonResponse(safe_user(user, membership), status=201)
-    target_membership = Membership.objects.filter(workspace=workspace, user_id=user_id).select_related("user").first()
+    target_membership = Membership.objects.select_for_update().filter(workspace=workspace, user_id=user_id).select_related("user").first()
     if not target_membership:
         return JsonResponse({"error": "Zugang nicht gefunden."}, status=404)
     target = target_membership.user
@@ -194,13 +229,22 @@ def user_view(request, user_id=None):
     if request.method == "DELETE":
         if target.id == request.user.id:
             return JsonResponse({"error": "Du kannst deinen eigenen Zugang nicht entfernen."}, status=400)
+        target_id = target.id
+        target_name = target.label
+        member = target_membership.member
         target_membership.delete()
-        if not target.workspace_memberships.exists():
-            target.is_active = False
-            target.access_status = "deactivated"
-            target.save(update_fields=("is_active", "access_status"))
-        audit(workspace, request.user, "deleted", "workspace-membership", target.id, f"Zugang von {target.label} aus diesem Bereich entfernt")
+        if member and not member.memberships.exists() and member.user_id == target.id:
+            member.user = None
+            member.save(update_fields=("user",))
+        audit(workspace, request.user, "deleted", "workspace-membership", target_id, f"Zugang von {target_name} aus diesem Bereich entfernt")
+        if not target.is_system_admin and not target.workspace_memberships.exists():
+            target.delete()
         return JsonResponse({"ok": True})
+    if "displayName" in payload or payload.get("password"):
+        return JsonResponse(
+            {"error": "Persönliche Kontodaten und Passwörter kann nur die Person selbst ändern."},
+            status=403,
+        )
     role = str(payload.get("role") or target_membership.role)[:100]
     next_admin = role in ADMIN_ROLES
     if target_membership.is_admin and not next_admin and workspace.memberships.filter(is_admin=True, access_status="active").count() <= 1:
@@ -209,24 +253,20 @@ def user_view(request, user_id=None):
         return JsonResponse({"error": "Du kannst deinen eigenen Zugang zu diesem Bereich nicht pausieren."}, status=400)
     if payload.get("accessStatus") == "paused" and target_membership.is_admin and workspace.memberships.filter(is_admin=True, access_status="active").count() <= 1:
         return JsonResponse({"error": "Die letzte aktive Administration des Bereichs kann nicht pausiert werden."}, status=409)
-    target.display_name = str(payload.get("displayName") or target.label)[:250]
     target_membership.role = role
     target_membership.is_admin = next_admin
     if "permissions" in payload:
         target_membership.permissions = permissions(payload.get("permissions"), full=target_membership.is_admin)
     if payload.get("accessStatus") in {"active", "paused"}:
+        if payload["accessStatus"] == "active" and (target.access_status != "active" or not target.is_active) and not request.user.is_system_admin:
+            return JsonResponse({"error": "Dieser Zugang ist installationsweit gesperrt und kann nur durch die Betreiberverwaltung aktiviert werden."}, status=409)
         target_membership.access_status = payload["accessStatus"]
         # Früher importierte Pausen waren kontoweit. Sobald eine Verwaltung
-        # den Bereich wieder aktiviert, wird auch dieser Altstatus aufgehoben.
-        if payload["accessStatus"] == "active" and target.access_status == "paused":
+        # mit Betreiberrechten den Bereich wieder aktiviert, wird auch dieser
+        # Altstatus aufgehoben.
+        if payload["accessStatus"] == "active" and request.user.is_system_admin and (target.access_status != "active" or not target.is_active):
             target.access_status = "active"
             target.is_active = True
-    if payload.get("password"):
-        try:
-            validate_password(str(payload["password"]), target)
-        except ValidationError as error:
-            return JsonResponse({"error": " ".join(error.messages)}, status=400)
-        target.set_password(str(payload["password"]))
     target.save()
     target_membership.save()
     audit(workspace, request.user, "updated", "user", target.id, f"Zugang von {target.label} geändert")
@@ -271,14 +311,14 @@ def onboarding_view(request):
 
 
 def notification_preferences(request):
+    workspace, membership = membership_context(request)
     payload = parse_json(request)
     preference = str(payload.get("notificationPreference") or "mentions")
     if preference not in {"all", "mentions", "none"}:
         return JsonResponse({"error": "Ungültige Benachrichtigungseinstellung."}, status=400)
     request.user.notification_preference = preference
-    request.user.notification_email = str(payload.get("notificationEmail") or "").strip()
+    request.user.notification_email = valid_email_or_empty(payload.get("notificationEmail"))
     request.user.save(update_fields=("notification_preference", "notification_email"))
-    workspace, membership = membership_context(request)
     return JsonResponse(safe_user(request.user, membership, self_view=True))
 
 
@@ -297,7 +337,7 @@ def privacy_workspace(request):
 
 
 def privacy_export(request, zipped=False):
-    workspace, membership = membership_context(request)
+    workspace, membership = membership_context(request, allow_locked=True)
     records = list(Record.objects.filter(workspace=workspace).select_related("attachment"))
     permissions_by_kind = {
         "case": "cases", "correspondence": "cases", "task": "tasks", "routine_plan": "tasks",
@@ -346,7 +386,7 @@ def privacy_export(request, zipped=False):
     })
     if not zipped:
         return JsonResponse(payload)
-    buffer = io.BytesIO()
+    buffer = tempfile.SpooledTemporaryFile(max_size=10 * 1024 * 1024, mode="w+b")
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("miteinander-export.json", json.dumps(payload, ensure_ascii=False, indent=2))
         file_ids = {record.attachment_id for record in visible_records if record.attachment_id}
@@ -355,12 +395,14 @@ def privacy_export(request, zipped=False):
         file_ids.update(member.photo_id for member in visible_member_models if member.photo_id)
         for managed in ManagedFile.objects.filter(id__in=file_ids):
             try:
-                with managed.file.open("rb") as source:
-                    archive.writestr(f"dateien/{managed.id}-{managed.original_name}", source.read())
+                safe_name = managed.original_name.replace("\\", "/").rsplit("/", 1)[-1]
+                with managed.file.open("rb") as source, archive.open(f"dateien/{managed.id}-{safe_name}", "w") as destination:
+                    shutil.copyfileobj(source, destination, length=1024 * 1024)
             except FileNotFoundError:
                 continue
-    response = HttpResponse(buffer.getvalue(), content_type="application/zip")
-    response["Content-Disposition"] = f'attachment; filename="miteinander-{workspace.id}.zip"'
+    buffer.seek(0)
+    response = FileResponse(buffer, as_attachment=True, filename=f"miteinander-{workspace.id}.zip", content_type="application/zip")
+    response["Cache-Control"] = "private, no-store"
     return response
 
 
@@ -388,4 +430,5 @@ def operator_status(request, workspace_id):
         workspace.deletion_requested_at = None
         workspace.deletion_after = None
     workspace.save(update_fields=("status", "deletion_requested_at", "deletion_after"))
+    audit(workspace, request.user, "updated", "workspace-status", workspace.id, f"Bereichsstatus auf {status} gesetzt")
     return JsonResponse({"ok": True})

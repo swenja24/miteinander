@@ -5,7 +5,11 @@ db.sqlite3
 media/
 staticfiles/
 .env
+.env.*
+!.env.example
 data/
+backups/
+*.dump
 .DS_Store
 .idea/
 .vscode/

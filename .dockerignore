@@ -10,3 +10,9 @@ db.sqlite3
 media
 staticfiles
 .env
+.env.*
+!.env.example
+backups
+*.dump
+*.tgz
+*.sha256

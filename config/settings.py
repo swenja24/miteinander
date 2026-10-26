@@ -108,8 +108,12 @@ SESSION_COOKIE_NAME = "miteinander_session"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Strict"
 SESSION_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() in {"1", "true", "yes"}
+SESSION_COOKIE_AGE = max(900, int(os.environ.get("SESSION_COOKIE_AGE_SECONDS", "28800")))
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_SAVE_EVERY_REQUEST = True
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 CSRF_COOKIE_SAMESITE = "Strict"
+CSRF_FAILURE_VIEW = "core.views.csrf_failure"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", "true").lower() in {"1", "true", "yes"}
 SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "31536000")) if not DEBUG else 0
@@ -132,6 +136,7 @@ DATA_CONTROLLER_NAME = os.environ.get("DATA_CONTROLLER_NAME", "")
 DATA_CONTROLLER_CONTACT = os.environ.get("DATA_CONTROLLER_CONTACT", "")
 DEVELOPER_CONTACT_EMAIL = os.environ.get("DEVELOPER_CONTACT_EMAIL", "")
 AUDIT_RETENTION_DAYS = max(30, int(os.environ.get("AUDIT_RETENTION_DAYS", "730")))
+WORKSPACE_STORAGE_LIMIT_BYTES = max(50, int(os.environ.get("WORKSPACE_STORAGE_LIMIT_MB", "2048"))) * 1024 * 1024
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
@@ -150,4 +155,8 @@ LOGGING = {
     "formatters": {"jsonish": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"}},
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "jsonish"}},
     "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+    "loggers": {
+        "django.request": {"handlers": ["console"], "level": "CRITICAL", "propagate": False},
+        "django.security.csrf": {"handlers": ["console"], "level": "CRITICAL", "propagate": False},
+    },
 }

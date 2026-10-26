@@ -7,10 +7,12 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import re
 import secrets
 import struct
 import uuid
+import warnings
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -19,8 +21,10 @@ from defusedxml import ElementTree as ET
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Sum
 from django.http import HttpRequest
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
@@ -51,28 +55,60 @@ COLLECTION_BY_KIND = {value: key for key, value in KIND_BY_COLLECTION.items()}
 ADMIN_ROLES = {"Leistungsberechtigte Person", "Gesetzliche Betreuung", "Enge Angehörige"}
 
 
+class WorkspaceLockedError(PermissionError):
+    pass
+
+
 def safe_color(value, fallback="#285c4d"):
     candidate = str(value or "")
     return candidate if re.fullmatch(r"#[0-9a-fA-F]{6}", candidate) else fallback
 
 
-def clean(value):
+def clean(value, *, _depth=0):
+    if _depth > 12:
+        raise ValueError("Die Eingabe ist zu tief verschachtelt.")
     if isinstance(value, str):
         return value.strip()[:5000]
     if isinstance(value, dict):
-        return {str(key)[:100]: clean(item) for key, item in value.items() if key not in {"id", "workspaceId", "createdAt", "updatedAt"}}
+        if len(value) > 250:
+            raise ValueError("Die Eingabe enthält zu viele Felder.")
+        return {str(key)[:100]: clean(item, _depth=_depth + 1) for key, item in value.items() if key not in {"id", "workspaceId", "createdAt", "updatedAt"}}
     if isinstance(value, list):
-        return [clean(item) for item in value[:1000]]
+        if len(value) > 1000:
+            raise ValueError("Die Eingabe enthält zu viele Listeneinträge.")
+        return [clean(item, _depth=_depth + 1) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Zahlen müssen endlich sein.")
     return value
 
 
 def parse_json(request: HttpRequest) -> dict:
     if not request.body:
         return {}
-    value = json.loads(request.body)
+    try:
+        value = json.loads(
+            request.body,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("Ungültiger Zahlenwert.")),
+        )
+    except RecursionError as error:
+        raise ValueError("Die Eingabe ist zu tief verschachtelt.") from error
     if not isinstance(value, dict):
         raise ValueError("Die Anfrage muss ein JSON-Objekt enthalten.")
+    clean(value)
     return value
+
+
+def valid_email_or_empty(value) -> str:
+    email = str(value or "").strip()
+    if not email:
+        return ""
+    if len(email) > 254:
+        raise ValueError("Bitte gib eine gültige E-Mail-Adresse an.")
+    try:
+        validate_email(email)
+    except ValidationError as error:
+        raise ValueError("Bitte gib eine gültige E-Mail-Adresse an.") from error
+    return email
 
 
 def permissions(value: dict | None = None, *, full: bool = False) -> dict:
@@ -107,14 +143,24 @@ def safe_user(user: User, membership: Membership | None = None, *, self_view: bo
     return result
 
 
-def membership_context(request: HttpRequest) -> tuple[Workspace, Membership]:
+def membership_context(request: HttpRequest, *, allow_locked=False) -> tuple[Workspace, Membership]:
     queryset = Membership.objects.select_related("workspace", "member").filter(user=request.user)
     requested = request.headers.get("X-Workspace-ID", "")
-    membership = queryset.filter(workspace_id=requested, access_status="active").first() if requested else None
-    if not membership:
-        membership = queryset.filter(access_status="active").order_by("created_at").first()
+    if requested:
+        try:
+            membership = queryset.filter(workspace_id=requested, access_status="active").first()
+        except ValidationError:
+            membership = None
+        if not membership:
+            raise PermissionError("Du hast keinen aktiven Zugriff auf diesen Bereich.")
+    else:
+        membership = queryset.filter(access_status="active", workspace__status="active").order_by("created_at").first()
+        if not membership:
+            membership = queryset.filter(access_status="active").order_by("created_at").first()
     if not membership:
         raise PermissionError("Dir ist derzeit kein aktiver Bereich zugeordnet.")
+    if not allow_locked and membership.workspace.status in {"paused", "deletion-pending"}:
+        raise WorkspaceLockedError("Dieser Bereich ist vorübergehend gesperrt.")
     return membership.workspace, membership
 
 
@@ -228,6 +274,11 @@ def record_dict(record: Record) -> dict:
     value = dict(record.payload)
     if record.kind == "account":
         value["color"] = safe_color(value.get("color"))
+    if record.kind == "correspondence":
+        if str(value.get("reminderDays") or "none") not in {"none", "2", "7", "14", "30"}:
+            value["reminderDays"] = "none"
+        if value.get("deadlineStatus") not in {None, "", "open", "met", "cancelled"}:
+            value["deadlineStatus"] = "open"
     value.update({
         "id": str(record.id),
         "workspaceId": str(record.workspace_id),
@@ -293,19 +344,26 @@ def validate_and_store_file(workspace: Workspace, user: User, data_url: str, ori
         raise ValueError("Die Datei konnte nicht gelesen werden.") from error
     if not content or len(content) > 5_000_000:
         raise ValueError("Die Datei ist leer oder größer als 5 MB.")
+    used_bytes = ManagedFile.objects.filter(workspace=workspace).aggregate(total=Sum("size"))["total"] or 0
+    if used_bytes + len(content) > settings.WORKSPACE_STORAGE_LIMIT_BYTES:
+        raise ValueError("Der Speicherplatz dieses Bereichs ist ausgeschöpft. Bitte lösche nicht mehr benötigte Dateien oder erhöhe das Speicherlimit.")
 
     actual = None
     extension = None
     if content.startswith(b"%PDF-"):
-        actual, extension = "application/pdf", ".pdf"
+        active_pdf_markers = (b"/JavaScript", b"/JS", b"/Launch", b"/EmbeddedFile", b"/OpenAction", b"/AA")
+        if b"%%EOF" in content[-2048:] and not any(marker in content for marker in active_pdf_markers):
+            actual, extension = "application/pdf", ".pdf"
     else:
         try:
-            Image.MAX_IMAGE_PIXELS = 40_000_000
-            with Image.open(io.BytesIO(content)) as image:
-                image.verify()
-                formats = {"JPEG": ("image/jpeg", ".jpg"), "PNG": ("image/png", ".png"), "WEBP": ("image/webp", ".webp")}
-                actual, extension = formats.get(image.format, (None, None))
-        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+            Image.MAX_IMAGE_PIXELS = 20_000_000
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(content)) as image:
+                    image.verify()
+                    formats = {"JPEG": ("image/jpeg", ".jpg"), "PNG": ("image/png", ".png"), "WEBP": ("image/webp", ".webp")}
+                    actual, extension = formats.get(image.format, (None, None))
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
             pass
     if not actual or actual != claimed:
         raise ValueError("Dateityp und Dateiinhalt stimmen nicht überein.")
@@ -314,7 +372,9 @@ def validate_and_store_file(workspace: Workspace, user: User, data_url: str, ori
     if pdf_only and actual != "application/pdf":
         raise ValueError("Hier wird eine PDF-Datei benötigt.")
     digest = hashlib.sha256(content).hexdigest()
-    safe_name = Path(original_name or "Dokument").name.replace("\r", "").replace("\n", "")[:255] or "Dokument"
+    normalized_name = str(original_name or "Dokument").replace("\\", "/")
+    safe_name = Path(normalized_name).name
+    safe_name = "".join(character for character in safe_name if ord(character) >= 32 and ord(character) != 127)[:255] or "Dokument"
     managed = ManagedFile(
         workspace=workspace, category=category, original_name=safe_name,
         content_type=actual, size=len(content), sha256=digest, uploaded_by=user,

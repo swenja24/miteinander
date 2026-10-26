@@ -9,6 +9,9 @@ Miteinander speichert besonders schutzbedürftige persönliche Daten. Die betrei
 - Berechtigte Personen können eine ZIP-Datenkopie ihres aktiven Bereichs mit strukturierten JSON-Daten und allen zugehörigen Dateien herunterladen.
 - Eine Löschanforderung sperrt den Bereich; die Betreiberverwaltung kann sie innerhalb von 30 Tagen widerrufen. Danach entfernt der tägliche Hintergrundlauf Daten und zugehörige Uploads.
 - Änderungsprotokolle bleiben standardmäßig 730 Tage erhalten. `AUDIT_RETENTION_DAYS` ändert diese Frist.
+- Abgelaufene, widerrufene oder angenommene Einladungsdatensätze werden nach 90 Tagen automatisch entfernt.
+- Pausierte Personen erhalten weder Bereichsdaten noch E-Mail-Hinweise aus dem betreffenden Bereich.
+- Wird die letzte Mitgliedschaft eines normalen Kontos entfernt, wird das verwaiste Konto mitsamt Login-, E-Mail- und 2FA-Daten gelöscht. Protokolle behalten nur den zum Ereigniszeitpunkt gespeicherten Anzeigenamen.
 
 Backups und hochgeladene Dateien benötigen ein eigenes Löschkonzept. Sicherungen sollten verschlüsselt, zugriffsbeschränkt und zeitlich begrenzt aufbewahrt werden. Für Reverse Proxy, Mailanbieter, Hosting und Backup-Speicher ist zu prüfen, ob Auftragsverarbeitungsverträge erforderlich sind.
 

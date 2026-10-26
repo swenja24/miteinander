@@ -1,14 +1,14 @@
 import hashlib
 import uuid
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 
 from core.models import ManagedFile, Member, Membership, Record, Workspace, WorkspaceOptions, WorkspaceProfile
-from core.services import KIND_BY_COLLECTION, allowed, audit, create_record, import_fingerprint, member_dict, membership_context, next_recurring_date, parse_json, parse_statement, permissions, profile_dict, record_dict, recurring_dates, update_record, validate_and_store_file
+from core.services import KIND_BY_COLLECTION, allowed, audit, create_record, import_fingerprint, member_dict, membership_context, next_recurring_date, parse_json, parse_statement, permissions, profile_dict, record_dict, recurring_dates, update_record, valid_email_or_empty, validate_and_store_file
 
 
 PERMISSION_BY_COLLECTION = {
@@ -112,11 +112,45 @@ def _validate_payload(workspace, collection, payload):
                 date.fromisoformat(str(payload[key]))
             except ValueError as error:
                 raise ValueError("Mindestens ein Datum ist ungültig.") from error
+    if collection == "calendarEvents":
+        for key in ("startTime", "endTime"):
+            if payload.get(key):
+                try:
+                    datetime.strptime(str(payload[key]), "%H:%M")
+                except ValueError as error:
+                    raise ValueError("Mindestens eine Uhrzeit ist ungültig.") from error
+        if payload.get("startTime") and payload.get("endTime") and not payload.get("endDate") and str(payload["endTime"]) < str(payload["startTime"]):
+            raise ValueError("Das Terminende darf nicht vor dem Beginn liegen.")
     if collection == "ledger":
         if payload.get("type") not in {"income", "expense"}:
             raise ValueError("Die Buchungsart ist ungültig.")
+        if payload.get("receiptStatus") not in {None, "", "available", "none"}:
+            raise ValueError("Der Belegstatus ist ungültig.")
+        try:
+            amount = Decimal(str(payload.get("amount")).replace(",", "."))
+            if not amount.is_finite() or amount < 0 or amount >= Decimal("1000000000000"):
+                raise ValueError
+        except (InvalidOperation, TypeError, ValueError) as error:
+            raise ValueError("Der Betrag ist ungültig.") from error
         if not Record.objects.filter(workspace=workspace, kind="account", pk=payload.get("accountId")).exists():
             raise ValueError("Bitte wähle ein gültiges Konto aus.")
+    allowed_statuses = {
+        "cases": {"draft", "collecting", "submitted", "question", "approved", "done"},
+        "tasks": {"open", "planned", "done", "refused"},
+    }
+    if collection in allowed_statuses and payload.get("status") not in {None, "", *allowed_statuses[collection]}:
+        raise ValueError("Der Status ist ungültig.")
+    if collection in {"tasks", "calendarEvents"} and payload.get("recurrence") not in {None, "", "once", "daily", "weekly", "biweekly", "monthly", "quarterly", "yearly"}:
+        raise ValueError("Die Wiederholung ist ungültig.")
+    if collection == "correspondence":
+        if payload.get("eventType") not in {None, "", "correspondence", "letter", "deadline", "status", "note"}:
+            raise ValueError("Die Art des Verlaufseintrags ist ungültig.")
+        if payload.get("deadlineStatus") not in {None, "", "open", "met", "cancelled"}:
+            raise ValueError("Der Friststatus ist ungültig.")
+        if str(payload.get("reminderDays") or "none") not in {"none", "2", "7", "14", "30"}:
+            raise ValueError("Die Erinnerung ist ungültig.")
+    if collection == "accounts" and payload.get("type") not in {None, "", "Bargeld", "Bankkonto"}:
+        raise ValueError("Die Kontoart ist ungültig.")
 
 
 def generic_collection(request, collection: str, item_id=None):
@@ -145,9 +179,7 @@ def generic_collection(request, collection: str, item_id=None):
                 return JsonResponse({"error": "Der Hauptantrag wurde nicht gefunden."}, status=400)
             if collection in {"tasks", "calendarEvents"}:
                 return _create_recurring(request, workspace, membership, collection, payload)
-            attachment = _attachment_from_payload(workspace, request.user, collection, payload)
-            if collection == "ledger" and payload.get("receiptStatus") == "none":
-                attachment = None
+            attachment = None if collection == "ledger" and payload.get("receiptStatus") == "none" else _attachment_from_payload(workspace, request.user, collection, payload)
             record = create_record(workspace, kind, payload, request.user, attachment)
             if collection == "correspondence":
                 _sync_deadline_reminder(workspace, record, request.user)
@@ -177,7 +209,7 @@ def generic_collection(request, collection: str, item_id=None):
                     history.append({"type": "rescheduled", "from": old_due, "to": new_due, "at": timezone.now().isoformat(), "byUserId": str(request.user.id), "byName": request.user.label})
                     payload["history"] = history
             old_attachment = record.attachment
-            attachment = _attachment_from_payload(workspace, request.user, collection, payload)
+            attachment = None if collection == "ledger" and payload.get("receiptStatus") == "none" else _attachment_from_payload(workspace, request.user, collection, payload)
             if collection == "ledger" and payload.get("receiptStatus") == "none":
                 record.attachment = None
             update_record(record, payload, request.user, attachment)
@@ -194,6 +226,7 @@ def generic_collection(request, collection: str, item_id=None):
             if collection in {"tasks", "calendarEvents"} and record.series_id and series_scope in {"future", "all"}:
                 date_filter = {} if series_scope == "all" else {"event_date__gte": record.event_date}
                 targets = Record.objects.filter(workspace=workspace, kind=kind, series_id=record.series_id, **date_filter)
+                target_ids = list(targets.values_list("id", flat=True))
                 count = targets.count()
                 if collection == "tasks" and not membership.is_admin:
                     stamp = timezone.now().isoformat()
@@ -201,6 +234,7 @@ def generic_collection(request, collection: str, item_id=None):
                         target.payload.update({"deletedAt": stamp, "deletedByUserId": str(request.user.id), "deletedByName": request.user.label})
                         target.save(update_fields=("payload", "updated_at"))
                     return JsonResponse({"ok": True, "pendingAdminConfirmation": True, "affected": count})
+                Record.objects.filter(workspace=workspace, kind="topic_comment", parent_id__in=target_ids).delete()
                 targets.delete()
                 audit(workspace, request.user, "deleted-series", collection, record.series_id, f"{count} Vorkommnisse einer Serie gelöscht")
                 return JsonResponse({"ok": True, "affected": count})
@@ -217,6 +251,11 @@ def generic_collection(request, collection: str, item_id=None):
                     {"error": "Dieser Antrag enthält noch Korrespondenz oder Ergänzungsanträge. Bitte lösche diese zuerst."},
                     status=409,
                 )
+            if collection == "accounts" and Record.objects.filter(workspace=workspace, kind="ledger", account_id=record.id).exists():
+                return JsonResponse(
+                    {"error": "Dieses Konto enthält noch Buchungen. Lösche oder verschiebe diese zuerst."},
+                    status=409,
+                )
             if collection == "correspondence" and record.payload.get("reminderTaskId"):
                 Record.objects.filter(
                     workspace=workspace,
@@ -224,6 +263,8 @@ def generic_collection(request, collection: str, item_id=None):
                     pk=record.payload["reminderTaskId"],
                 ).delete()
             attachment = record.attachment
+            if collection in {"cases", "tasks"}:
+                Record.objects.filter(workspace=workspace, kind="topic_comment", parent_id=record.id).delete()
             record.delete()
             if attachment and not attachment.records.exists():
                 attachment.delete()
@@ -298,9 +339,10 @@ def member_collection(request, workspace, membership, item_id, editing_own):
         payload = parse_json(request)
         if not str(payload.get("name") or "").strip():
             return JsonResponse({"error": "Bitte gib einen Namen an."}, status=400)
+        email = valid_email_or_empty(payload.get("email"))
         photo_data = payload.pop("photoData", None)
         photo = validate_and_store_file(workspace, request.user, str(photo_data), str(payload.pop("photoName", "Profilfoto")), "member", images_only=True) if photo_data else None
-        member = Member.objects.create(home_workspace=workspace, name=str(payload.get("name") or "")[:250], role=str(payload.get("role") or "")[:100], email=str(payload.get("email") or ""), phone=str(payload.get("phone") or "")[:100], address=str(payload.get("address") or "")[:5000], personal_words=str(payload.get("personalWords") or "")[:5000], color=str(payload.get("color") or "#285c4d")[:30], photo=photo)
+        member = Member.objects.create(home_workspace=workspace, name=str(payload.get("name") or "")[:250], role=str(payload.get("role") or "")[:100], email=email, phone=str(payload.get("phone") or "")[:100], address=str(payload.get("address") or "")[:5000], personal_words=str(payload.get("personalWords") or "")[:5000], color=str(payload.get("color") or "#285c4d")[:30], photo=photo)
         return JsonResponse(member_dict(member), status=201)
     member = Member.objects.select_related("photo").filter(pk=item_id).first()
     if not member or not (member.home_workspace_id == workspace.id or editing_own):
@@ -312,7 +354,8 @@ def member_collection(request, workspace, membership, item_id, editing_own):
         mapping = {"name": "name", "role": "role", "email": "email", "phone": "phone", "address": "address", "personalWords": "personal_words", "color": "color"}
         for source, target in mapping.items():
             if source in payload:
-                setattr(member, target, str(payload[source])[:5000 if target in {"address", "personal_words"} else 250])
+                value = valid_email_or_empty(payload[source]) if target == "email" else str(payload[source])[:5000 if target in {"address", "personal_words"} else 250]
+                setattr(member, target, value)
         if payload.get("photoData"):
             old = member.photo
             member.photo = validate_and_store_file(workspace, request.user, str(payload["photoData"]), str(payload.get("photoName") or "Profilfoto"), "member", images_only=True)
@@ -321,6 +364,11 @@ def member_collection(request, workspace, membership, item_id, editing_own):
         member.save()
         return JsonResponse(member_dict(member))
     if request.method == "DELETE" and membership.is_admin:
+        if member.user_id or member.memberships.exists():
+            return JsonResponse(
+                {"error": "Dieses Profil ist mit einem Zugang verknüpft. Entferne zuerst die betreffende Mitgliedschaft."},
+                status=409,
+            )
         photo = member.photo
         member.delete()
         if photo and not photo.member_photos.exists():

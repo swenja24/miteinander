@@ -21,10 +21,11 @@ COPY --chown=nobody:nogroup config ./config
 COPY --chown=nobody:nogroup core ./core
 COPY --chown=nobody:nogroup public ./public
 COPY --chown=nobody:nogroup docker ./docker
-RUN chmod +x /app/docker/entrypoint.sh
+RUN chmod +x /app/docker/entrypoint.sh && \
+    DJANGO_SECRET_KEY=container-build-only SECURE_SSL_REDIRECT=false COOKIE_SECURE=false python manage.py collectstatic --noinput
 USER nobody
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD python -c "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/health', headers={'X-Forwarded-Proto':'https'}); urllib.request.urlopen(request, timeout=3)" || exit 1
+  CMD python -c "import os, urllib.request; host=os.environ.get('ALLOWED_HOSTS','localhost').split(',')[0].strip() or 'localhost'; request=urllib.request.Request('http://127.0.0.1:8000/api/health', headers={'Host':host,'X-Forwarded-Proto':'https'}); urllib.request.urlopen(request, timeout=3)" || exit 1
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "--timeout", "60", "--access-logfile", "-", "--error-logfile", "-"]
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "--timeout", "60", "--error-logfile", "-"]

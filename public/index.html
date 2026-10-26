@@ -1,4 +1,4 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
@@ -6,15 +6,15 @@
   <meta name="theme-color" content="#f7f5ef">
   <meta name="description" content="Miteinander organisiert Eingliederungshilfe, Aufgaben, Anträge und gemeinsame Kassen in geschützten Bereichen.">
   <title>Miteinander – Eingliederungshilfe organisieren</title>
-  <link rel="manifest" href="/static/manifest.webmanifest">
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/fonts/fonts.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/styles.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/ledger.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/team.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/communication.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/readiness.css?v=20261026-1">
-  <link rel="stylesheet" href="/static/calendar.css?v=20261026-1">
+  <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+  <link rel="icon" href="{% static 'icon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
+  <link rel="stylesheet" href="{% static 'styles.css' %}">
+  <link rel="stylesheet" href="{% static 'ledger.css' %}">
+  <link rel="stylesheet" href="{% static 'team.css' %}">
+  <link rel="stylesheet" href="{% static 'communication.css' %}">
+  <link rel="stylesheet" href="{% static 'readiness.css' %}">
+  <link rel="stylesheet" href="{% static 'calendar.css' %}">
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -79,6 +79,6 @@
 
   <dialog id="modal"><div class="modal-card"><button class="modal-close" type="button" aria-label="Schließen">×</button><div id="modal-content"></div></div></dialog>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/static/app.js?v=20261026-1"></script>
+  <script type="module" src="{% static 'app.js' %}"></script>
 </body>
 </html>

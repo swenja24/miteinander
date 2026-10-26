@@ -17,6 +17,7 @@ class User(AbstractUser):
     is_system_admin = models.BooleanField(default=False)
     totp_secret = models.CharField(max_length=128, blank=True)
     pending_totp_secret = models.CharField(max_length=128, blank=True)
+    pending_totp_created_at = models.DateTimeField(null=True, blank=True)
     totp_enabled = models.BooleanField(default=False)
     legacy_password_hash = models.TextField(blank=True)
     onboarding_dismissed = models.JSONField(default=list, blank=True)

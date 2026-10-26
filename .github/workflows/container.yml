@@ -46,7 +46,12 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pip-audit==2.10.1 bandit==1.9.4
+
+      - name: Audit dependencies and Python security
+        run: |
+          pip-audit -r requirements.txt
+          bandit -r config core manage.py -x core/tests -lll -ii
 
       - name: Run Django checks and tests
         env:
@@ -102,6 +107,8 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

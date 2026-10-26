@@ -23,4 +23,7 @@ def secure_file(request, file_id):
         return JsonResponse({"error": "Datei nicht gefunden."}, status=404)
     response["Cache-Control"] = "private, no-store"
     response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    response["Cross-Origin-Resource-Policy"] = "same-origin"
+    response["X-Frame-Options"] = "DENY"
     return response
