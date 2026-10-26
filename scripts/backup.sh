@@ -2,10 +2,15 @@
 set -eu
 
 BACKUP_DIR=${1:-./backups}
-VOLUME=${MITEINANDER_VOLUME:-miteinander_data}
 STAMP=$(date +%Y%m%d-%H%M%S)
+ARCHIVE="miteinander-$STAMP.tgz"
+TMP_DIR=$(mktemp -d)
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+
 mkdir -p "$BACKUP_DIR"
-docker run --rm -v "$VOLUME:/data:ro" -v "$(cd "$BACKUP_DIR" && pwd):/backup" alpine \
-  tar czf "/backup/miteinander-$STAMP.tgz" -C /data .
-(cd "$BACKUP_DIR" && sha256sum "miteinander-$STAMP.tgz" > "miteinander-$STAMP.tgz.sha256")
-echo "Backup erstellt: $BACKUP_DIR/miteinander-$STAMP.tgz"
+docker compose exec -T database pg_dump -U miteinander -d miteinander -Fc > "$TMP_DIR/database.dump"
+docker compose exec -T miteinander tar czf - -C /app/data . > "$TMP_DIR/files.tgz"
+tar czf "$BACKUP_DIR/$ARCHIVE" -C "$TMP_DIR" database.dump files.tgz
+(cd "$BACKUP_DIR" && sha256sum "$ARCHIVE" > "$ARCHIVE.sha256")
+echo "Backup erstellt: $BACKUP_DIR/$ARCHIVE"

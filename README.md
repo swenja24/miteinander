@@ -1,144 +1,137 @@
 # Miteinander
 
-Ein selbst gehosteter MVP zur gemeinsamen Organisation von Eingliederungshilfe in Familien.
+Miteinander ist eine selbst gehostete Webanwendung zur gemeinsamen Organisation von Eingliederungshilfe und ambulant betreutem Wohnen. Persönliche Bereiche, gemeinsame WG-Bereiche, fein abgestufte Rechte und die Perspektive der leistungsberechtigten Person stehen im Mittelpunkt.
 
-[![MIT License](https://img.shields.io/badge/Lizenz-MIT-green.svg)](LICENSE)
+## Technische Architektur
 
-## Enthalten
+- Django 5.2 LTS als modularer Python-Anwendungskern
+- Gunicorn als Produktionsserver
+- PostgreSQL für transaktionssichere, mandantengetrennte Daten
+- Redis und Celery für E-Mail-Hinweise und automatische Löschfristen
+- WhiteNoise für statische Dateien
+- lokale, geschützte Uploads oder optional S3-kompatibler Objektspeicher
+- Docker Compose für Proxmox, Arcane und vergleichbare Umgebungen
 
-- Anträge und Behördenkontakte mit Status und Fristen
-- Aufgaben, Zuständigkeiten und Fälligkeiten mit täglichen, wöchentlichen, zweiwöchentlichen, monatlichen, vierteljährlichen und jährlichen Wiederholungen
-- Dokumentenregister mit Zuordnung zu Anträgen
-- Digitales Kassenbuch für mehrere Kassen und Konten, Belegfotos, CSV-Export für Excel und druckbare PDF-Ansicht
-- Familienbereich mit beteiligten Personen und Rollen
-- Antragsakten mit Ergänzungsanträgen, neutraler Ereignis- und Fristentimeline, Korrespondenz sowie geschützten Bild- und PDF-Anhängen
-- Personalisierter Bereich „Über [Name]“ mit Profilfoto, mehreren BEI-PDFs, Personenprofil, Zielen, Kommentarverlauf und administrativ freigegebenen Regeln
-- Gemeinsames Verzeichnis wichtiger Kontakte mit Kategorien, Suche und geschützten Bearbeitungsrechten
-- Versionierte Tages- und Wochenabläufe mit Foto/PDF, gemeinsamer Bearbeitung und administrativer Freigabe
-- Individuelle Zugänge, rollenbasierte Bereichsrechte und persistente Datenspeicherung
-- Rollenabhängige erste Schritte sowie selbst bearbeitbare Teamprofile; normale Teammitglieder können ausschließlich ihr eigenes Profil ändern
-- Infobrett mit Lesebestätigungen, thematische Verläufe, @-Erwähnungen und optionale datensparsame E-Mail-Hinweise
-- Getrennte persönliche und gemeinsame WG-Bereiche mit einem Login, Bereichsumschalter, eigener Gemeinschaftskasse und gemeinsamen Aufgaben
-- Responsive, tastaturbedienbare Oberfläche
-- Wiederkehrende Kalendertermine mit optionalem Enddatum; ohne Enddatum werden laufend die nächsten sieben Vorkommnisse bereitgehalten
-- Serien lassen sich wahlweise für ein Vorkommnis, ab einem Vorkommnis oder vollständig bearbeiten und löschen
-- Datenschutzbewusstes Feedbackformular für Verbesserungswünsche mit lokaler Sammlung und optionaler E-Mail-Weiterleitung
+Fachlich unterschiedliche Detailfelder bleiben flexibel als JSON in ihrem jeweiligen Datensatz. Ein Antrag, eine Aufgabe oder eine Buchung ist trotzdem immer eine eigene Datenbankzeile mit Bereichszuordnung, Datum, Status und weiteren indexierten Kernfeldern. Es gibt keine gemeinsame JSON-Datei mehr, die bei gleichzeitigen Änderungen überschrieben werden kann.
 
-> Hinweis: Der MVP ist ein Organisationswerkzeug und keine Rechts- oder Fachsoftware. Dateien liegen geschützt hinter der Anmeldung, werden im Docker-Volume aber nicht zusätzlich anwendungsseitig verschlüsselt.
+## Funktionen
 
-## Schnellstart mit Docker Compose
-
-1. `compose.yaml` und `.env.example` auf den Docker-Host kopieren.
-2. `.env.example` nach `.env` kopieren und `GHCR_IMAGE` sowie `APP_PASSWORD` ändern.
-3. Starten:
-
-   ```bash
-   cp .env.example .env
-   docker compose pull
-   docker compose up -d
-   ```
-
-4. Im Browser `http://SERVER-IP:3080` öffnen.
-
-Die Daten liegen im Docker-Volume `miteinander_data`. Der Container kann neu gebaut oder aktualisiert werden, ohne die Daten zu verlieren.
-
-Beim ersten Start der Mehrbereichsversion werden vorhandene Daten automatisch dem bisherigen persönlichen Bereich zugeordnet. Gemeinsame WG-Bereiche werden anschließend im Familien-Steuerungszentrum angelegt. Inhalte werden nicht zwischen Bereichen kopiert; Aufgaben, Buchungen und Infobrett-Einträge gehören immer genau zu dem Bereich, in dem sie erstellt wurden.
-
-Persönliche Bereiche entstehen ausschließlich durch eine Einladung in der Betreiberverwaltung. Assistenzkonten können deshalb nicht versehentlich eigene persönliche Bereiche anlegen. Bereichsadministrator*innen können den jeweils aktiven persönlichen oder gemeinsamen Bereich unter „Hilfe & Datenschutz“ mit einer 30-tägigen Sicherheitsfrist löschen lassen; die Betreiberverwaltung kann diese Löschung innerhalb der Frist widerrufen.
-
-## Automatische Images auf GHCR
-
-Der Workflow `.github/workflows/container.yml` läuft bei jedem Push auf `main`. Er führt die Tests aus, baut das Docker-Image und veröffentlicht zwei Tags:
-
-- `latest` für den jeweils neuesten erfolgreichen Build von `main`
-- `sha-…` für einen unveränderlichen, eindeutig einem Commit zugeordneten Build
-
-Das Image wird unter `ghcr.io/GITHUB-NAME/REPOSITORY` veröffentlicht. Nach dem ersten erfolgreichen Lauf in GitHub unter **Packages → Package settings → Change visibility** einmalig die Sichtbarkeit auf **Public** setzen. Danach kann Docker das Image ohne Registry-Zugangsdaten beziehen.
-
-Für ein Rollback in `compose.yaml` statt `:latest` den vorherigen Commit-Tag eintragen, beispielsweise `:sha-a1b2c3d`, und den Stack erneut bereitstellen.
+- Anträge mit Vorgängen, Korrespondenz, Anhängen, Fristen und Ergänzungsanträgen
+- einmalige und wiederkehrende Aufgaben sowie versionierte Tages- und Wochenabläufe
+- Kalender mit berechtigungsabhängigen Quellen und persönlichem iCal-Abonnement
+- Dokumentenablage mit Kamera-/Scan-Upload
+- Kassenbuch für mehrere Konten, Belegfotos, CSV-/CAMT-Import und Export
+- persönliche und gemeinsame WG-Bereiche unter einem Zugang
+- Profile, Ziele, Regeln, BEIs, Kontakte, Infobrett und thematische Beiträge
+- Einladungslinks, je Bereich pausierbare Zugänge, Modulrechte, Zwei-Faktor-Anmeldung und Änderungsprotokoll
+- vollständiger Bereichsexport als ZIP mit JSON-Daten und Dateien
 
 ## Deployment mit Arcane
 
-In Arcane einen neuen Stack mit `compose.yaml` anlegen und die Variablen aus `.env.example` als Stack-Umgebungsvariablen konfigurieren. `GHCR_IMAGE` muss vollständig und kleingeschrieben sein, beispielsweise `ghcr.io/mein-name/miteinander`.
+1. Bei einer bestehenden Installation den vorhandenen Arcane-Stack aktualisieren
+   und dessen Volume `miteinander_data` unbedingt beibehalten. Nur bei einer
+   komplett neuen Installation einen neuen Stack anlegen. `compose.yaml` und die
+   Werte aus `.env.example` in Arcane hinterlegen.
+2. Mindestens diese Werte individuell setzen:
 
-Für ein Update in Arcane das neue `latest`-Image ziehen und den Stack neu bereitstellen. `pull_policy: always` sorgt dafür, dass beim Deployment nicht versehentlich der lokale Cache verwendet wird. Das Daten-Volume bleibt dabei erhalten.
+   - `POSTGRES_PASSWORD`
+   - `DJANGO_SECRET_KEY`
+   - `BOOTSTRAP_ADMIN_PASSWORD`
+   - `ALLOWED_HOSTS`
+   - `CSRF_TRUSTED_ORIGINS`
+   - `APP_BASE_URL`
 
-Für einen kontrollierteren Produktivbetrieb kann Arcane statt `latest` auch einen konkreten `sha-…`-Tag verwenden. Der Build erfolgt weiterhin bei jedem Push, aber der produktive Wechsel wird dann bewusst vorgenommen.
+   Zufallswerte lassen sich beispielsweise so erzeugen:
 
-Für externen Zugriff sollte die App hinter einem Reverse Proxy mit HTTPS laufen. Port `3080` muss dann nicht öffentlich freigegeben werden. Die App setzt bewusst keine `Secure`-Cookie-Markierung, damit sie im lokalen Netz zunächst auch per HTTP funktioniert; bei öffentlichem Betrieb sollte ausschließlich HTTPS verwendet werden.
+   ```bash
+   openssl rand -hex 32
+   openssl rand -base64 48
+   ```
 
-### Optionale E-Mail-Benachrichtigungen
+3. Den Stack hinter einem Reverse Proxy mit HTTPS veröffentlichen. Der Standardport am Host ist `3080` und lässt sich mit `HOST_PORT` ändern.
+4. Stack bereitstellen. Die Anwendung führt Datenbankmigrationen selbst aus und legt bei einer leeren Installation den ersten Zugang an.
 
-Für E-Mail-Hinweise die `SMTP_*`-Variablen aus `.env.example` in Arcane setzen. `APP_BASE_URL` ist die öffentliche HTTPS-Adresse der Anwendung. Die E-Mail enthält bewusst weder Nachrichtentext noch Gesundheitsdaten, sondern nur den Hinweis, dass in Miteinander eine neue Information vorliegt. Ohne SMTP-Konfiguration funktionieren Infobrett, Erwähnungen und Lesebestätigungen weiterhin; lediglich der externe E-Mail-Versand bleibt aus.
+Die Dienste sind:
 
-Verbesserungswünsche werden immer lokal in der JSON-Datei gesammelt und sind nur in der Betreiberansicht sichtbar. Wenn `DEVELOPER_CONTACT_EMAIL` und SMTP konfiguriert sind, wird zusätzlich eine E-Mail an diese Adresse verschickt. Das Formular weist darauf hin, keine personenbezogenen, medizinischen oder dokumentbezogenen Inhalte einzutragen.
+- `miteinander`: Django/Gunicorn-Webanwendung
+- `database`: PostgreSQL
+- `redis`: Aufgabenwarteschlange
+- `worker`: E-Mail- und Hintergrundaufgaben
+- `scheduler`: tägliche Lösch- und Aufbewahrungsprüfung
 
-Unter „Hilfe & Datenschutz“ nennt die App die verantwortliche Stelle der jeweiligen Installation. Dafür in Arcane `DATA_CONTROLLER_NAME` und `DATA_CONTROLLER_CONTACT` setzen. Der persistente Docker-Datenträger `/app/data` muss regelmäßig verschlüsselt gesichert werden; eine Wiederherstellung sollte vor dem Praxiseinsatz getestet werden.
+## Update und Rollback
 
-Für einen öffentlichen HTTPS-Betrieb außerdem `COOKIE_SECURE=true` setzen. Zwei-Faktor-Anmeldung, Datenexport, Löschanforderung und Betreiberverwaltung befinden sich unter „Hilfe & Datenschutz“. Weitere Hinweise stehen in [PRIVACY.md](PRIVACY.md) und [SECURITY.md](SECURITY.md).
+Bei jedem Push auf `main` prüft GitHub Actions den Code, baut ein Image und veröffentlicht `latest` sowie einen unveränderlichen `sha-…`-Tag in GHCR. Für einen kontrollierten Produktivbetrieb empfiehlt sich in Arcane ein konkreter `IMAGE_TAG=sha-…`. Vor einem Update immer ein Backup erstellen.
 
-## Kalender und Handysynchronisation
+Für ein Update Image und Stack neu bereitstellen. Django-Migrationen laufen vor dem Start von Gunicorn. Für ein Rollback den vorherigen `sha-…`-Tag verwenden. Ein Datenbankschema lässt sich nicht in jedem Fall durch einen reinen Image-Rollback zurückdrehen; deshalb gehört das Backup zwingend zum Updateablauf.
 
-Der Kalender verbindet eigene Termine, Aufgaben und Antragsfristen, ohne sie doppelt zu speichern. Sichtbar sind nur Quellen, für die der angemeldete Zugang berechtigt ist. Der persönliche iCal-Link übernimmt dieselben Rechte bei jedem Abruf; wird etwa der Zugriff auf Anträge oder den Kalender entzogen, liefert das Abonnement diese Inhalte nicht mehr. Der Link kann in der App jederzeit erneuert oder widerrufen werden und sollte wie ein Passwort behandelt werden. Für einen von außen erreichbaren HTTPS-Link muss `APP_BASE_URL` auf die öffentliche Adresse gesetzt sein.
+## Übernahme der bisherigen JSON-Installation
 
-## Manueller Kontoauszugsimport
+Das bisherige Docker-Volume `miteinander_data` bleibt am Pfad `/app/data` eingebunden. Liegt dort `familie.json` und ist PostgreSQL noch leer, importiert die neue Version automatisch:
 
-Im Kassenbuch können CSV- und CAMT.053/XML-Kontoauszüge einem Konto zugeordnet werden. Der Ablauf ist bewusst manuell: Umsätze im Onlinebanking herunterladen, in Miteinander auswählen, Vorschau prüfen und importieren. Die Datei selbst wird nicht dauerhaft gespeichert. Importierte Umsätze erhalten den Status „zu prüfen“; Kategorie, Beleg und Beschreibung müssen bei Bedarf ergänzt werden. Ein Fingerabdruck aus Konto, Datum, Betrag, Beschreibung und Zahlungspartner verhindert übliche Doppelimporte.
+- Bereiche und Mitgliedschaften
+- Zugänge einschließlich einmaliger Passwortmigration beim nächsten Login
+- alle Facheinträge und Optionen
+- hochgeladene Dokumente, Bilder und Belege
+- Einladungen, Kalenderlinks, Feedback und Änderungsprotokolle
 
-Es besteht keine Verbindung zur Bank und es werden keine Echtzeitdaten abgerufen. Der Stand entspricht ausschließlich der zuletzt importierten Datei. CSV-Spalten unterscheiden sich je nach Bank; mindestens eine Datums- und eine Betragsspalte müssen erkennbar sein. CAMT.053 ist deshalb nach Möglichkeit das robustere Exportformat.
+Die alte JSON-Datei wird nur gelesen und bleibt als zusätzliche Rückfallkopie erhalten. Der Import ist idempotent und wird übersprungen, sobald ein Bereich in PostgreSQL existiert.
+
+In Arcane muss deshalb der bestehende Stack aktualisiert werden. Wird stattdessen
+ein Stack mit anderem Namen angelegt, erzeugt Docker normalerweise auch ein neues,
+leeres Volume. Vor dem Start in Arcane kontrollieren, dass der Dienst
+`miteinander` wirklich das bisherige Datenvolume nach `/app/data` einbindet.
+Zusätzlich das alte Volume über Arcane oder per Proxmox-Backup sichern; erst
+danach das neue Image starten.
+
+Vor diesem Versionswechsel ein Backup des bisherigen Volumes erstellen. Nach dem Start mit einem Admin- und einem Assistenzkonto alle sichtbaren Bereiche, einige Anhänge und Kontostände stichprobenartig kontrollieren.
 
 ## Backup und Wiederherstellung
 
-Die mitgelieferten Skripte erstellen ein Backup mit SHA-256-Prüfsumme und testen die Wiederherstellung in einem kurzlebigen Docker-Volume:
+Ein vollständiges Backup braucht zwei Bestandteile:
+
+- PostgreSQL-Dump
+- Upload-Volume `/app/data`
+
+Im Verzeichnis mit `compose.yaml`:
 
 ```bash
 ./scripts/backup.sh ./backups
 ./scripts/restore-test.sh ./backups/miteinander-JJJJMMTT-HHMMSS.tgz
 ```
 
-Alle Nutzdaten stehen in `/app/data/familie.json`; Belegbilder liegen unter `/app/data/receipts`, Dateien aus Antragsakten unter `/app/data/case-files`, hochgeladene Dokumente unter `/app/data/document-files`, Profilfoto sowie BEIs unter `/app/data/about-files` und Anhänge von Ablaufplänen unter `/app/data/routine-files`. Ein Backup muss deshalb immer das gesamte Volume enthalten:
+Das Backupskript erzeugt zusätzlich eine SHA-256-Prüfsumme. `restore-test.sh` stellt den Datenbankdump in einem kurzlebigen PostgreSQL-Container wieder her und prüft das Dateiarchiv, ohne den laufenden Stack zu verändern. Backups müssen verschlüsselt, zugriffsbeschränkt und mit einer dokumentierten Aufbewahrungsfrist gespeichert werden.
+
+Bei Verwendung eines S3-kompatiblen Objektspeichers muss dessen Inhalt zusätzlich mit den Werkzeugen des Speicheranbieters gesichert und wiederherstellbar getestet werden.
+
+Für einen S3-kompatiblen Speicher werden in `.env` `AWS_STORAGE_BUCKET_NAME`,
+`AWS_ACCESS_KEY_ID` und `AWS_SECRET_ACCESS_KEY` gesetzt. Bei Diensten wie MinIO
+oder Hetzner Object Storage kommen `AWS_S3_ENDPOINT_URL` und gegebenenfalls
+`AWS_S3_REGION_NAME` hinzu. Ohne Bucket-Namen bleiben Uploads im geschützten
+Docker-Volume.
+
+## Lokale Entwicklung
 
 ```bash
-docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/miteinander-backup.tgz -C /data .
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+SECURE_SSL_REDIRECT=false COOKIE_SECURE=false .venv/bin/python manage.py migrate
+BOOTSTRAP_ADMIN_PASSWORD='ein-langes-Testpasswort' \
+  SECURE_SSL_REDIRECT=false COOKIE_SECURE=false \
+  .venv/bin/python manage.py bootstrap_miteinander
+SECURE_SSL_REDIRECT=false COOKIE_SECURE=false .venv/bin/python manage.py runserver
 ```
 
-Wiederherstellung bei gestopptem App-Container:
+Tests:
 
 ```bash
-docker run --rm -v miteinander_data:/data -v "$PWD":/backup alpine \
-  sh -c 'rm -rf /data/* && tar xzf /backup/miteinander-backup.tgz -C /data'
+SECURE_SSL_REDIRECT=false COOKIE_SECURE=false .venv/bin/python manage.py test core.tests
 ```
 
-## Lokale Entwicklung mit Python
+## Sicherheit und Datenschutz
 
-Es werden keine externen Python-Pakete benötigt.
+Miteinander verarbeitet potenziell Gesundheits-, Sozial- und Finanzdaten. Vor einem echten Einsatz sind unter anderem Rechtsgrundlage, Rollen- und Berechtigungskonzept, Auftragsverarbeitung, Löschfristen, Backup-Verschlüsselung, Wiederherstellung, Vorfallprozess und Datenschutzhinweise fachlich zu prüfen. Technische Hinweise stehen in [SECURITY.md](SECURITY.md), datenschutzbezogene Hinweise in [PRIVACY.md](PRIVACY.md).
 
-```bash
-APP_PASSWORD=entwicklung python3 server.py
-```
+Die Schriftfamilie Carlito steht separat unter der [SIL Open Font License 1.1](public/fonts/OFL.txt).
 
-Danach ist die App unter `http://localhost:3000` erreichbar.
-
-Ein lokales Container-Image kann weiterhin unabhängig von GHCR gebaut werden:
-
-```bash
-docker build -t miteinander:dev .
-```
-
-## Sicherheit vor produktivem Einsatz
-
-- Ein starkes Startpasswort über `APP_PASSWORD` setzen.
-- Der erste Zugang heißt `linea` und verwendet beim ersten Start `APP_PASSWORD`. Weitere Zugänge und Bereichsrechte werden in der Familienansicht angelegt.
-- Für jede Person einen eigenen Zugang verwenden; Passwörter nicht gemeinsam nutzen.
-- HTTPS über einen Reverse Proxy aktivieren.
-- Docker-Volume regelmäßig verschlüsselt sichern.
-- Zugriff auf den Familienkreis und bei Bedarf VPN/LAN beschränken.
-- Vor der Nutzung mit echten Gesundheits- oder Sozialdaten Datenschutz, Löschkonzept, Aufbewahrungsfristen und Berechtigungskonzept fachlich prüfen lassen.
-
-## Lizenz
-
-Miteinander ist Open Source und steht unter der [MIT-Lizenz](LICENSE).
-
-Die mitgelieferte Schriftfamilie Carlito steht separat unter der
-[SIL Open Font License 1.1](public/fonts/OFL.txt).
+Der derzeit veröffentlichte Quellcode steht gemäß der Datei [LICENSE](LICENSE) unter der MIT-Lizenz. Eine spätere Änderung des Geschäfts- oder Lizenzmodells sollte vor der nächsten Veröffentlichung bewusst entschieden werden; bereits unter MIT veröffentlichte Fassungen lassen sich nicht rückwirkend zurücknehmen.

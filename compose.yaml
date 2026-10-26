@@ -1,14 +1,53 @@
 services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: miteinander
+      POSTGRES_USER: miteinander
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD muss gesetzt sein}"
+    volumes:
+      - miteinander_database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miteinander -d miteinander"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - miteinander_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   miteinander:
-    image: "${GHCR_IMAGE:?GHCR_IMAGE muss in .env gesetzt sein}:latest"
+    image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
     pull_policy: always
-    container_name: miteinander-eglh
     restart: unless-stopped
     ports:
-      - "3080:3000"
-    environment:
-      APP_PASSWORD: "${APP_PASSWORD:?APP_PASSWORD muss in .env gesetzt sein}"
+      - "${HOST_PORT:-3080}:8000"
+    environment: &app_environment
+      DATABASE_URL: "postgresql://miteinander:${POSTGRES_PASSWORD}@database:5432/miteinander"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+      CACHE_URL: "redis://redis:6379/2"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY muss gesetzt sein}"
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:?ALLOWED_HOSTS muss gesetzt sein}"
+      CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-}"
       APP_BASE_URL: "${APP_BASE_URL:-}"
+      BOOTSTRAP_ADMIN_USERNAME: "${BOOTSTRAP_ADMIN_USERNAME:-admin}"
+      BOOTSTRAP_ADMIN_PASSWORD: "${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD muss beim ersten Start gesetzt sein}"
+      BOOTSTRAP_ADMIN_NAME: "${BOOTSTRAP_ADMIN_NAME:-Administration}"
+      BOOTSTRAP_ADMIN_ROLE: "${BOOTSTRAP_ADMIN_ROLE:-Gesetzliche Betreuung}"
+      BOOTSTRAP_PERSON_NAME: "${BOOTSTRAP_PERSON_NAME:-Leistungsberechtigte Person}"
+      BOOTSTRAP_WORKSPACE_NAME: "${BOOTSTRAP_WORKSPACE_NAME:-Persönlicher Bereich}"
+      MEDIA_ROOT: "/app/data/media"
       DATA_CONTROLLER_NAME: "${DATA_CONTROLLER_NAME:-}"
       DATA_CONTROLLER_CONTACT: "${DATA_CONTROLLER_CONTACT:-}"
       DEVELOPER_CONTACT_EMAIL: "${DEVELOPER_CONTACT_EMAIL:-}"
@@ -18,11 +57,54 @@ services:
       SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_TLS: "${SMTP_TLS:-true}"
-      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      AWS_STORAGE_BUCKET_NAME: "${AWS_STORAGE_BUCKET_NAME:-}"
+      AWS_S3_ENDPOINT_URL: "${AWS_S3_ENDPOINT_URL:-}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_S3_REGION_NAME: "${AWS_S3_REGION_NAME:-eu-central-1}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+      SECURE_SSL_REDIRECT: "${SECURE_SSL_REDIRECT:-true}"
       AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-730}"
       TZ: "Europe/Berlin"
     volumes:
       - miteinander_data:/app/data
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
+    pull_policy: always
+    restart: unless-stopped
+    command: ["celery", "-A", "config", "worker", "--loglevel=INFO", "--concurrency=2"]
+    environment: *app_environment
+    volumes:
+      - miteinander_data:/app/data
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      miteinander:
+        condition: service_healthy
+
+  scheduler:
+    image: "${GHCR_IMAGE:?GHCR_IMAGE muss gesetzt sein}:${IMAGE_TAG:-latest}"
+    pull_policy: always
+    restart: unless-stopped
+    command: ["celery", "-A", "config", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *app_environment
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      miteinander:
+        condition: service_healthy
 
 volumes:
+  miteinander_database:
+  miteinander_redis:
   miteinander_data:

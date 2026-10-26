@@ -1,0 +1,65 @@
+from django.urls import path, re_path
+
+from core.api import auth, features, files, records, workspaces
+from core.views import api_endpoint, health, index, service_worker
+
+
+urlpatterns = [
+    path("", index, name="index"),
+    path("service-worker.js", service_worker),
+    path("api/health", api_endpoint(health, methods={"GET"}, public=True)),
+    path("api/login", api_endpoint(auth.login_view, methods={"POST"}, public=True)),
+    path("api/logout", api_endpoint(auth.logout_view, methods={"POST"})),
+    path("api/invitations/<str:raw_token>/accept", api_endpoint(auth.accept_invitation, methods={"POST"}, public=True)),
+    path("api/invitations/<str:raw_token>/join", api_endpoint(auth.join_invitation, methods={"POST"})),
+    path("api/invitations", api_endpoint(auth.create_invitation, methods={"POST"})),
+    path("api/invitations/<uuid:invitation_id>", api_endpoint(auth.revoke_invitation, methods={"DELETE"})),
+    path("api/operator/invitations", api_endpoint(lambda request: auth.create_invitation(request, independent=True), methods={"POST"})),
+    path("api/security/totp/setup", api_endpoint(lambda request: auth.totp_view(request, "setup"), methods={"POST"})),
+    path("api/security/totp/confirm", api_endpoint(lambda request: auth.totp_view(request, "confirm"), methods={"POST"})),
+    path("api/security/totp", api_endpoint(lambda request: auth.totp_view(request, "disable"), methods={"DELETE"})),
+    path("api/calendar-feed", api_endpoint(auth.calendar_feed, methods={"POST", "DELETE"})),
+    path("api/calendar-feed/<str:token>.ics", api_endpoint(auth.calendar_feed, methods={"GET"}, public=True)),
+
+    path("api/data", api_endpoint(workspaces.data_view, methods={"GET"})),
+    path("api/workspaces", api_endpoint(workspaces.create_workspace_view, methods={"POST"})),
+    path("api/workspaces/<uuid:workspace_id>/membership", api_endpoint(workspaces.workspace_membership_view, methods={"PUT", "DELETE"})),
+    path("api/users", api_endpoint(workspaces.user_view, methods={"POST"})),
+    path("api/users/<int:user_id>", api_endpoint(workspaces.user_view, methods={"PUT", "DELETE"})),
+    path("api/person-profile", api_endpoint(workspaces.profile_view, methods={"PUT"})),
+    path("api/family", api_endpoint(workspaces.family_view, methods={"PUT"})),
+    path("api/onboarding", api_endpoint(workspaces.onboarding_view, methods={"PUT"})),
+    path("api/notification-preferences", api_endpoint(workspaces.notification_preferences, methods={"PUT"})),
+    path("api/privacy/workspace", api_endpoint(workspaces.privacy_workspace, methods={"DELETE"})),
+    path("api/privacy/export", api_endpoint(workspaces.privacy_export, methods={"GET"})),
+    path("api/privacy/export.zip", api_endpoint(lambda request: workspaces.privacy_export(request, zipped=True), methods={"GET"})),
+    path("api/operator", api_endpoint(workspaces.operator_view, methods={"GET"})),
+    path("api/operator/<uuid:workspace_id>/status", api_endpoint(workspaces.operator_status, methods={"PUT"})),
+
+    path("api/profile-photo", api_endpoint(records.profile_photo, methods={"PUT"})),
+    path("api/ledger-options", api_endpoint(lambda request: records.options_view(request, "ledger"), methods={"PUT"})),
+    path("api/task-options", api_endpoint(lambda request: records.options_view(request, "task"), methods={"PUT"})),
+    path("api/contact-options", api_endpoint(lambda request: records.options_view(request, "contact"), methods={"PUT"})),
+    path("api/bank-import/preview", api_endpoint(lambda request: records.bank_import(request, commit=False), methods={"POST"})),
+    path("api/bank-import/commit", api_endpoint(lambda request: records.bank_import(request, commit=True), methods={"POST"})),
+    path("api/ledger/<uuid:record_id>/review", api_endpoint(records.ledger_review, methods={"PUT"})),
+
+    path("api/about/<str:collection>", api_endpoint(features.about_collection, methods={"POST"})),
+    path("api/about/<str:collection>/<uuid:item_id>", api_endpoint(features.about_collection, methods={"PUT", "DELETE"})),
+    path("api/contacts", api_endpoint(features.contacts, methods={"POST"})),
+    path("api/contacts/<uuid:item_id>", api_endpoint(features.contacts, methods={"PUT", "DELETE"})),
+    path("api/routine-plans", api_endpoint(features.routine_plans, methods={"POST"})),
+    path("api/routine-plans/<uuid:item_id>", api_endpoint(features.routine_plans, methods={"PUT", "DELETE"})),
+    path("api/routine-plans/<uuid:item_id>/review", api_endpoint(lambda request, item_id: features.routine_plans(request, item_id, review=True), methods={"PUT"})),
+    path("api/announcements", api_endpoint(features.announcements, methods={"POST"})),
+    path("api/announcements/<uuid:item_id>", api_endpoint(features.announcements, methods={"DELETE"})),
+    path("api/announcements/<uuid:item_id>/read", api_endpoint(lambda request, item_id: features.announcements(request, item_id, read=True), methods={"PUT"})),
+    path("api/topic-comments", api_endpoint(features.topic_comments, methods={"POST"})),
+    path("api/topic-comments/<uuid:item_id>", api_endpoint(features.topic_comments, methods={"DELETE"})),
+    path("api/developer-feedback", api_endpoint(features.developer_feedback, methods={"POST"})),
+
+    path("api/files/<uuid:file_id>", api_endpoint(files.secure_file, methods={"GET"})),
+    re_path(r"^api/(?:receipts|case-files|document-files|about-files|routine-files|member-files)/(?P<file_id>[0-9a-fA-F-]{36})$", api_endpoint(files.secure_file, methods={"GET"})),
+    path("api/<str:collection>", api_endpoint(records.generic_collection, methods={"POST"})),
+    path("api/<str:collection>/<uuid:item_id>", api_endpoint(records.generic_collection, methods={"PUT", "DELETE"})),
+]

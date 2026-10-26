@@ -5,4 +5,8 @@ data
 npm-debug.log
 __pycache__
 *.pyc
+.venv
+db.sqlite3
+media
+staticfiles
 .env

@@ -1,0 +1,11 @@
+{
+  "name": "Miteinander",
+  "short_name": "Miteinander",
+  "description": "Eingliederungshilfe gemeinsam organisieren",
+  "lang": "de",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#285c4d",
+  "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}

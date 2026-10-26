@@ -1,5 +1,9 @@
 __pycache__/
 *.py[cod]
+.venv/
+db.sqlite3
+media/
+staticfiles/
 .env
 data/
 .DS_Store
