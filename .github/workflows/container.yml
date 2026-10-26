@@ -71,7 +71,7 @@ jobs:
           sh -n docker/entrypoint.sh scripts/backup.sh scripts/restore-test.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Normalize image name
         id: image
