@@ -1,10 +1,10 @@
-FROM python:3.13-slim AS builder
+FROM python:3.15-slim AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 COPY requirements.txt ./
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --upgrade pip && /opt/venv/bin/pip install -r requirements.txt
 
-FROM python:3.13-slim
+FROM python:3.15-slim
 LABEL org.opencontainers.image.title="Miteinander" \
       org.opencontainers.image.description="Eingliederungshilfe gemeinsam und übersichtlich organisieren" \
       org.opencontainers.image.licenses="MIT"
